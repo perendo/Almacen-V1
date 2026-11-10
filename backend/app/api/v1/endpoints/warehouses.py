@@ -1,0 +1,89 @@
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.orm import Session
+from typing import List, Any, Optional
+
+from app.api.deps import get_db, get_current_active_user, require_role, require_permission
+from app.models.base import Warehouse, Center
+from app.schemas import WarehouseBase, WarehouseCreate, WarehouseUpdate, WarehouseOut
+
+router = APIRouter()
+
+
+@router.get("/", response_model=List[WarehouseOut], tags=["warehouses"])
+def read_warehouses(
+    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    center_id: Optional[int] = Query(None),
+    type: Optional[str] = Query(None),
+    is_active: Optional[bool] = Query(None),
+    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
+) -> Any:
+    query = db.query(Warehouse)
+    if center_id:
+        query = query.filter(Warehouse.center_id == center_id)
+    if type:
+        query = query.filter(Warehouse.type == type)
+    if is_active is not None:
+        query = query.filter(Warehouse.is_active == is_active)
+    return query.offset(skip).limit(limit).all()
+
+
+@router.post("/", response_model=WarehouseOut, status_code=status.HTTP_201_CREATED, tags=["warehouses"])
+def create_warehouse(
+    warehouse_in: WarehouseCreate,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
+) -> Any:
+    center = db.query(Center).filter(Center.id == warehouse_in.center_id).first()
+    if not center:
+        raise HTTPException(status_code=404, detail="Centro no encontrado")
+    warehouse = Warehouse(**warehouse_in.model_dump())
+    db.add(warehouse)
+    db.commit()
+    db.refresh(warehouse)
+    return warehouse
+
+
+@router.get("/{warehouse_id}", response_model=WarehouseOut, tags=["warehouses"])
+def read_warehouse(
+    warehouse_id: int,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
+) -> Any:
+    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Almacén no encontrado")
+    return warehouse
+
+
+@router.put("/{warehouse_id}", response_model=WarehouseOut, tags=["warehouses"])
+def update_warehouse(
+    warehouse_id: int,
+    warehouse_in: WarehouseUpdate,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
+) -> Any:
+    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Almacén no encontrado")
+    for field, value in warehouse_in.model_dump(exclude_unset=True).items():
+        setattr(warehouse, field, value)
+    db.add(warehouse)
+    db.commit()
+    db.refresh(warehouse)
+    return warehouse
+
+
+@router.delete("/{warehouse_id}", tags=["warehouses"])
+def delete_warehouse(
+    warehouse_id: int,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
+) -> Any:
+    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    if not warehouse:
+        raise HTTPException(status_code=404, detail="Almacén no encontrado")
+    db.delete(warehouse)
+    db.commit()
+    return {"detail": "Almacén eliminado correctamente"}
