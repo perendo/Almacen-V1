@@ -19,10 +19,18 @@ pesimista, alertas, informes y **auditoría activa** de todas las mutaciones.
 | Pruebas de seguridad y aislamiento | ✅ **113/113** |
 | `npm run build` / `npm run lint` | ✅ sin errores |
 | Migraciones Alembic | ✅ `0001` + `0002` aplicadas |
-| Hallazgos de `auditoria.md` | ✅ cerrados (ver `QUALITY_AND_TEST_REPORT.md`) |
+| Auditoría inicial (`Docs/auditoria-1.md`) | ✅ **42/100** → hallazgos cerrados |
+| Re-auditoría GEMINI (post-remediación) | ✅ **97/100** — Apto para producción |
 
-> Evidencia detallada: `TEST_REPORT.md`, `QUALITY_AND_TEST_REPORT.md`,
-> `Docs/matriz-tenant.md` y `CHANGELOG.md`.
+> **Re-auditoría GEMINI (noviembre 2026):** dictamen **APTO PARA PRODUCCIÓN — 97/100**
+> (+55 puntos respecto a la auditoría inicial de 42/100). Se verifican resueltos el
+> 100% de los defectos críticos y altos (BOLA/IDOR, escalada de privilegios,
+> `SECRET_KEY`, condiciones de carrera y descuento de stock, rotación de refresh
+> tokens) y **155/155 pruebas superadas**. Informe completo:
+> [`Informe_Auditoria_WMS_Almacen_V1.pdf`](Informe_Auditoria_WMS_Almacen_V1.pdf).
+
+> Evidencia detallada: `Informe_Auditoria_WMS_Almacen_V1.pdf`, `Docs/TEST_REPORT.md`,
+> `Docs/QUALITY_AND_TEST_REPORT.md`, `Docs/matriz-tenant.md` y `Docs/CHANGELOG.md`.
 
 ---
 
@@ -158,6 +166,10 @@ Documentación de decisiones: `Docs/adr/`.
 
 ```text
 H:\Almacen-V1\
+├── README.md
+├── AGENTS.md
+├── LICENSE
+├── Informe_Auditoria_WMS_Almacen_V1.pdf   # Re-auditoría GEMINI (97/100)
 ├── backend\
 │   ├── app\
 │   │   ├── api\v1\endpoints\      # 27 routers con aislamiento y auditoría
@@ -177,14 +189,18 @@ H:\Almacen-V1\
 │   ├── hooks\                     # TanStack Query
 │   └── lib\                       # api.ts, auth.ts, legal.ts
 ├── Docs\
+│   ├── Almacen.md                  # Especificación funcional
+│   ├── PLAN.md                     # Plan técnico (remediación de auditoría)
+│   ├── auditoria-1.md              # Auditoría inicial (42/100)
+│   ├── QUALITY_AND_TEST_REPORT.md  # Reporte de calidad y pruebas
+│   ├── TEST_REPORT.md              # Integración y seguridad
+│   ├── CHANGELOG.md                # Historial de cambios
+│   ├── DISCLAIMER.md               # Aviso de responsabilidad
+│   ├── TERMS.md                    # Términos y Condiciones de Uso
 │   ├── matriz-tenant.md
 │   └── adr\
 ├── docker-compose.yml
-├── .github\workflows\ci.yml
-├── PLAN.md
-├── TEST_REPORT.md
-├── QUALITY_AND_TEST_REPORT.md
-└── CHANGELOG.md
+└── .github\workflows\ci.yml
 ```
 
 ---
@@ -208,4 +224,4 @@ H:\Almacen-V1\
 MIT (`LICENSE`). Módulos de cumplimiento y soporte disponibles bajo licencia
 comercial. El software se entrega “tal cual”; la organización usuaria es
 responsable de la validación y del cumplimiento GxP/RGPD.
-Ver `TERMS.md`, `DISCLAIMER.md` y las páginas legales de la aplicación.
+Ver `Docs/TERMS.md`, `Docs/DISCLAIMER.md` y las páginas legales de la aplicación.

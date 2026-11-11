@@ -8,10 +8,10 @@ Este archivo proporciona instrucciones para los agentes de IA que trabajan en es
 
 **Nombre:** Módulo de Gestión de Almacén e Inventario (WMS)  
 **Descripción:** Sistema de gestión de almacén e inventario con multitenencia, trazabilidad completa (lotes, números de serie), control de inventario, alertas, informes y auditoría.  
-**Especificación funcional:** `Almacen.md`  
-**Plan técnico:** `PLAN.md`  
-**Informe de auditoría:** `auditoria.md` (Noviembre 2026 — Dictamen: RIESGO ALTO / CRÍTICO, 42/100; remediación en curso)  
-**Reporte de calidad:** `QUALITY_AND_TEST_REPORT.md`  
+**Especificación funcional:** `Docs/Almacen.md`  
+**Plan técnico:** `Docs/PLAN.md`  
+**Auditorías:** `Docs/auditoria-1.md` (inicial, 42/100 — riesgo crítico) y `Informe_Auditoria_WMS_Almacen_V1.pdf` (re-auditoría GEMINI, **97/100 — apto para producción**)  
+**Reporte de calidad:** `Docs/QUALITY_AND_TEST_REPORT.md`  
 
 ---
 
@@ -36,16 +36,10 @@ Este archivo proporciona instrucciones para los agentes de IA que trabajan en es
 
 ```
 H:\Almacen-V1\
-├── Almacen.md          # Especificación funcional
-├── PLAN.md             # Plan técnico aprobado (remediación de auditoría)
-├── QUALITY_AND_TEST_REPORT.md  # Reporte de calidad y pruebas
-├── TEST_REPORT.md      # Reporte de integración y seguridad (42 + 113 pruebas)
 ├── README.md           # Documentación del proyecto
 ├── AGENTS.md           # Este archivo
 ├── LICENSE             # Licencia MIT
-├── DISCLAIMER.md       # Aviso de responsabilidad
-├── TERMS.md            # Términos y Condiciones de Uso
-├── auditoria.md        # Informe de auditoría técnica y de seguridad
+├── Informe_Auditoria_WMS_Almacen_V1.pdf  # Re-auditoría GEMINI (97/100)
 ├── backend/            # API FastAPI
 │   ├── app/
 │   │   ├── main.py                 # App FastAPI con CORS, lifespan, /docs, /redoc, /health, /terminos, /privacidad, /aviso-legal
@@ -78,11 +72,18 @@ H:\Almacen-V1\
 │       ├── test_integration.py     # 42 pruebas de contrato (servidor levantado)
 │       └── test_security.py        # 113 pruebas de seguridad y aislamiento
 ├── Docs/
+│   ├── Almacen.md                  # Especificación funcional
+│   ├── PLAN.md                     # Plan técnico aprobado (remediación de auditoría)
+│   ├── auditoria-1.md              # Auditoría inicial (42/100)
+│   ├── QUALITY_AND_TEST_REPORT.md  # Reporte de calidad y pruebas
+│   ├── TEST_REPORT.md              # Reporte de integración y seguridad (42 + 113 pruebas)
+│   ├── CHANGELOG.md                # Historial de cambios
+│   ├── DISCLAIMER.md               # Aviso de responsabilidad
+│   ├── TERMS.md                    # Términos y Condiciones de Uso
 │   ├── matriz-tenant.md            # Matriz de aislamiento por módulo y evidencia
 │   └── adr/                        # ADR-001 auditoría, ADR-002 rate limit, ADR-003 licencia, ADR-004 tenencia
 ├── docker-compose.yml              # API + PostgreSQL (healthchecks)
 ├── .github/workflows/ci.yml        # CI: PostgreSQL + migraciones + 155 pruebas + build frontend
-├── CHANGELOG.md                    # Historial de cambios
 ├── frontend/                       # App Next.js
 │   ├── app/
 │   │   ├── layout.tsx              # Layout raíz
@@ -152,10 +153,10 @@ H:\Almacen-V1\
 ## 4. Flujo de Trabajo del Equipo
 
 1. **Director de Proyecto** → coordina a los agentes y ejecuta comandos de consola.
-2. **@arquitecto** → diseña BD, API y rutas; genera `PLAN.md`.
+2. **@arquitecto** → diseña BD, API y rutas; genera `Docs/PLAN.md`.
 3. **@fastapi_dev** → implementa backend (modelos, endpoints, CORS, JWT, seed).
 4. **@nextjs_dev** → implementa frontend (páginas, componentes, servicios API).
-5. **@tester_integracion** → valida comunicación CORS, payloads, estados de error; genera `TEST_REPORT.md` y `QUALITY_AND_TEST_REPORT.md`.
+5. **@tester_integracion** → valida comunicación CORS, payloads, estados de error; genera `Docs/TEST_REPORT.md` y `Docs/QUALITY_AND_TEST_REPORT.md`.
 
 ---
 
@@ -165,7 +166,7 @@ H:\Almacen-V1\
 
 ```powershell
 # Activar entorno virtual
-H:\Almacen\.venv\Scripts\Activate.ps1
+H:\Almacen-V1\.venv\Scripts\Activate.ps1
 
 # Instalar dependencias (incluye psycopg[binary] para PostgreSQL)
 pip install -r backend\requirements.txt
@@ -288,12 +289,12 @@ npm run lint       # Verifica linting
 | Rol | Agente | Responsabilidad |
 |-----|--------|-----------------|
 | Director de Proyecto | @director | Coordinación general, ejecución de comandos de consola |
-| Arquitecto | @arquitecto | Diseño de BD, API, rutas; PLAN.md |
+| Arquitecto | @arquitecto | Diseño de BD, API, rutas; `Docs/PLAN.md` |
 | Desarrollador Backend | @fastapi_dev | Implementación de API, BD, CORS, JWT, seed |
 | Desarrollador Frontend | @nextjs_dev | Interfaz de usuario, consumo de API |
 | Tester de Integración | @tester_integracion | Pruebas de integración, CORS, tipado, reporte |
 
 ---
 
-**Estado del proyecto:** ✅ 155/155 pruebas verdes (42 integración + 113 seguridad). Aislamiento multitenencia, auditoría activa, rate limiting, refresh rotatorio, frontend sin mocks y páginas legales verificados con PostgreSQL.  
+**Estado del proyecto:** ✅ 155/155 pruebas verdes (42 integración + 113 seguridad). Aislamiento multitenencia, auditoría activa, rate limiting, refresh rotatorio, frontend sin mocks y páginas legales verificados con PostgreSQL. Re-auditoría GEMINI (noviembre 2026): **97/100 — apto para producción** (`Informe_Auditoria_WMS_Almacen_V1.pdf`).  
 **Última actualización:** 11 de noviembre de 2026 (v1.1.0)
