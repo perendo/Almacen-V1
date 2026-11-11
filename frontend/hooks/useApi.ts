@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
-import type { StockOut, StockEntryCreate, StockMovementOut } from "@/types/stock"
+import type { StockOut, StockEntryCreate, StockExitCreate, StockMovementOut } from "@/types/stock"
 import type { Company, Center, Warehouse, Zone, Aisle, Shelf, Bin } from "@/types/organization"
 import type { Role, Permission, UserRole } from "@/types/rbac"
 import type { UserOut as User } from "@/types/auth"
@@ -232,7 +232,7 @@ export function useCreateStockEntry() {
 export function useCreateStockExit() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: any) => api.post("/stock/exit", body),
+    mutationFn: (body: StockExitCreate) => api.post("/stock/exit", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: stockKeys.all })
     },

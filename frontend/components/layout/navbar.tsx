@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useTheme } from "next-themes"
 import { useAuth } from "@/hooks/useAuth"
 import { usePathname } from "next/navigation"
 import { Menu, Sun, Moon } from "lucide-react"
@@ -8,7 +8,7 @@ import { Menu, Sun, Moon } from "lucide-react"
 export default function Navbar() {
   const { user } = useAuth()
   const pathname = usePathname()
-  const [theme, setTheme] = useState("light")
+  const { theme, setTheme } = useTheme()
 
   return (
     <header className="sticky top-0 z-40 flex h-16 items-center gap-4 border-b border-background bg-background/80 px-4 backdrop-blur">

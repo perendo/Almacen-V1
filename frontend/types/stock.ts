@@ -31,6 +31,20 @@ export interface StockEntryCreate {
   quality_control_blocked: boolean
 }
 
+export interface StockExitCreate {
+  warehouse_id: number
+  from_bin_id?: number
+  article_id: number
+  lot_id?: number
+  serial_id?: number
+  quantity: number
+  uom_id: number
+  strategy?: string
+  reference_type?: string
+  reference_id?: number
+  notes?: string
+}
+
 export interface StockMovementOut {
   id: number
   movement_type: StockMovementType
