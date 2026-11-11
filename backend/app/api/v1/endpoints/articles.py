@@ -1,28 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import Article, ArticleTranslation
+from app.api.deps import get_db, require_role
+from app.core.audit import log_audit_event
+from app.core.tenancy import is_superadmin, scope_query, tenant_get
+from app.models.base import Article
 from app.schemas import (
     ArticleBase,
     ArticleCreate,
     ArticleUpdate,
     ArticleOut,
-    ArticleTranslationBase,
-    ArticleTranslationCreate,
-    ArticleTranslationOut,
 )
 
 router = APIRouter()
-
-
-def _apply_tenant_filter(query, model, current_user: Any, company_id: Optional[int] = None):
-    """Aplica filtro de aislamiento multitenencia. Solo SuperAdmin puede filtrar por otra company_id."""
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" in user_roles and company_id is not None:
-        return query.filter(model.company_id == company_id)
-    return query.filter(model.company_id == current_user.company_id)
 
 
 # ============================================
@@ -43,8 +34,7 @@ def read_articles(
     is_active: Optional[bool] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Article)
-    query = _apply_tenant_filter(query, Article, current_user, company_id)
+    query = scope_query(db.query(Article), Article, current_user, company_id)
     if family_id:
         query = query.filter(Article.family_id == family_id)
     if subfamily_id:
@@ -63,6 +53,7 @@ def read_articles(
 @router.post("/", response_model=ArticleOut, status_code=status.HTTP_201_CREATED, tags=["articles"])
 def create_article(
     article_in: ArticleCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
@@ -83,6 +74,18 @@ def create_article(
     data["company_id"] = company_id
     article = Article(**data)
     db.add(article)
+    db.flush()
+    log_audit_event(
+        db,
+        action="create",
+        entity_type="Article",
+        entity_id=article.id,
+        current_user=current_user,
+        request=request,
+        company_id=company_id,
+        description=f"Alta de artículo {article.internal_code}",
+        new_values={"internal_code": article.internal_code, "ean13": article.ean13},
+    )
     db.commit()
     db.refresh(article)
     return article
@@ -94,33 +97,38 @@ def read_article(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Article).filter(Article.id == article_id)
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles:
-        query = query.filter(Article.company_id == current_user.company_id)
-    article = query.first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Artículo no encontrado")
-    return article
+    return tenant_get(db, Article, article_id, current_user, "Artículo no encontrado")
 
 
 @router.put("/{article_id}", response_model=ArticleOut, tags=["articles"])
 def update_article(
     article_id: int,
     article_in: ArticleUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    query = db.query(Article).filter(Article.id == article_id)
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles:
-        query = query.filter(Article.company_id == current_user.company_id)
-    article = query.first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Artículo no encontrado")
-    for field, value in article_in.model_dump(exclude_unset=True).items():
+    article = tenant_get(db, Article, article_id, current_user, "Artículo no encontrado")
+    data = article_in.model_dump(exclude_unset=True)
+
+    if "company_id" in data and not is_superadmin(current_user):
+        data.pop("company_id")
+
+    previous = {field: getattr(article, field) for field in data.keys()}
+    for field, value in data.items():
         setattr(article, field, value)
     db.add(article)
+    log_audit_event(
+        db,
+        action="update",
+        entity_type="Article",
+        entity_id=article.id,
+        current_user=current_user,
+        request=request,
+        description=f"Modificación de artículo {article.internal_code}",
+        old_values=previous,
+        new_values=data,
+    )
     db.commit()
     db.refresh(article)
     return article
@@ -129,56 +137,21 @@ def update_article(
 @router.delete("/{article_id}", tags=["articles"])
 def delete_article(
     article_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    query = db.query(Article).filter(Article.id == article_id)
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles:
-        query = query.filter(Article.company_id == current_user.company_id)
-    article = query.first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Artículo no encontrado en su empresa")
+    article = tenant_get(db, Article, article_id, current_user, "Artículo no encontrado en su empresa")
+    log_audit_event(
+        db,
+        action="delete",
+        entity_type="Article",
+        entity_id=article.id,
+        current_user=current_user,
+        request=request,
+        description=f"Baja de artículo {article.internal_code}",
+        old_values={"internal_code": article.internal_code, "ean13": article.ean13},
+    )
     db.delete(article)
     db.commit()
     return {"detail": "Artículo eliminado correctamente"}
-
-
-# ============================================
-# ARTICLE TRANSLATIONS
-# ============================================
-
-@router.get("/{article_id}/translations", response_model=List[ArticleTranslationOut], tags=["article-translations"])
-def read_article_translations(
-    article_id: int,
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
-) -> Any:
-    # Verificar pertenencia del artículo a la empresa del usuario
-    article = db.query(Article).filter(Article.id == article_id).first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Artículo no encontrado")
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles and article.company_id != current_user.company_id:
-        raise HTTPException(status_code=403, detail="No autorizado")
-    return db.query(ArticleTranslation).filter(ArticleTranslation.article_id == article_id).all()
-
-
-@router.post("/{article_id}/translations", response_model=ArticleTranslationOut, status_code=status.HTTP_201_CREATED, tags=["article-translations"])
-def create_article_translation(
-    article_id: int,
-    translation_in: ArticleTranslationCreate,
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
-) -> Any:
-    article = db.query(Article).filter(Article.id == article_id).first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Artículo no encontrado")
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles and article.company_id != current_user.company_id:
-        raise HTTPException(status_code=403, detail="No autorizado")
-    translation = ArticleTranslation(**translation_in.model_dump())
-    db.add(translation)
-    db.commit()
-    db.refresh(translation)
-    return translation

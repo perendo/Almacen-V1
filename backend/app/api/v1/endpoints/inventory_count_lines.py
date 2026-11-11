@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
+from app.api.deps import get_db, require_role
+from app.core.tenancy import scope_query
 from app.models.base import InventoryCountLine
 from app.schemas import InventoryCountLineOut
 
@@ -17,7 +18,7 @@ def read_inventory_count_lines(
     inventory_count_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(InventoryCountLine)
+    query = scope_query(db.query(InventoryCountLine), InventoryCountLine, current_user)
     if inventory_count_id:
         query = query.filter(InventoryCountLine.inventory_count_id == inventory_count_id)
     return query.offset(skip).limit(limit).all()

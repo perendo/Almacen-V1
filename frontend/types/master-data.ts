@@ -20,6 +20,33 @@ export interface Article {
   updated_at: string
 }
 
+export interface ArticleTranslation {
+  id: number
+  article_id: number
+  language_code: string
+  name: string | null
+  description: string | null
+  short_description: string | null
+}
+
+export interface ArticleUpdate {
+  internal_code: string
+  ean13?: string | null
+  supplier_reference?: string | null
+  family_id?: number | null
+  subfamily_id?: number | null
+  brand_id?: number | null
+  weight_kg?: number | null
+  volume_m3?: number | null
+  length_cm?: number | null
+  width_cm?: number | null
+  height_cm?: number | null
+  is_serialized: boolean
+  lot_required: boolean
+  abc_class: string
+  is_active: boolean
+}
+
 export interface ArticleFamily {
   id: number
   company_id: number

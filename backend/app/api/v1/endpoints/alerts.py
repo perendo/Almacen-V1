@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
+from datetime import datetime, timezone
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
+from app.api.deps import get_db, require_role
+from app.core.audit import log_audit_event
+from app.core.tenancy import is_superadmin, scope_query, tenant_get
 from app.models.base import Alert
 from app.schemas import (
     AlertBase,
@@ -26,9 +29,7 @@ def read_alerts(
     severity: Optional[str] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Alert)
-    if company_id:
-        query = query.filter(Alert.company_id == company_id)
+    query = scope_query(db.query(Alert), Alert, current_user, company_id)
     if alert_type:
         query = query.filter(Alert.alert_type == alert_type)
     if status:
@@ -41,14 +42,25 @@ def read_alerts(
 @router.put("/{alert_id}/acknowledge", response_model=AlertOut, tags=["alerts"])
 def acknowledge_alert(
     alert_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén"])),
 ) -> Any:
-    alert = db.query(Alert).filter(Alert.id == alert_id).first()
-    if not alert:
-        raise HTTPException(status_code=404, detail="Alerta no encontrada")
+    alert = tenant_get(db, Alert, alert_id, current_user, "Alerta no encontrada")
+    previous = alert.status
     alert.status = "acknowledged"
     db.add(alert)
+    log_audit_event(
+        db,
+        action="acknowledge",
+        entity_type="Alert",
+        entity_id=alert.id,
+        current_user=current_user,
+        request=request,
+        description="Alerta reconocida",
+        old_values={"status": previous},
+        new_values={"status": alert.status},
+    )
     db.commit()
     db.refresh(alert)
     return alert
@@ -58,17 +70,27 @@ def acknowledge_alert(
 def resolve_alert(
     alert_id: int,
     resolve_in: AlertResolve,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    alert = db.query(Alert).filter(Alert.id == alert_id).first()
-    if not alert:
-        raise HTTPException(status_code=404, detail="Alerta no encontrada")
+    alert = tenant_get(db, Alert, alert_id, current_user, "Alerta no encontrada")
+    previous = alert.status
     alert.status = "resolved"
-    from datetime import datetime
-    alert.resolved_at = datetime.utcnow()
+    alert.resolved_at = datetime.now(timezone.utc)
     alert.resolved_by = current_user.id
     db.add(alert)
+    log_audit_event(
+        db,
+        action="resolve",
+        entity_type="Alert",
+        entity_id=alert.id,
+        current_user=current_user,
+        request=request,
+        description="Alerta resuelta",
+        old_values={"status": previous},
+        new_values={"status": alert.status, "resolved_by": current_user.id},
+    )
     db.commit()
     db.refresh(alert)
     return alert

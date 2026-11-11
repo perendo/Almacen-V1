@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 from app.core.config import settings
 from app.core.database import SessionLocal, engine
 from app.core.security import decode_token
-from app.models.base import User, Role, Permission, RolePermission, UserRole
+from app.models.base import User, Role, Permission, RolePermission, RevokedToken, UserRole
 from app.schemas import TokenData
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
@@ -33,6 +33,13 @@ async def get_current_user(
     try:
         payload = decode_token(token)
         if payload is None:
+            raise credentials_exception
+        # Un refresh token no puede usarse como access token.
+        if payload.get("type") == "refresh":
+            raise credentials_exception
+        # Un access token revocado (logout) deja de ser válido inmediatamente.
+        jti = payload.get("jti")
+        if jti and db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first():
             raise credentials_exception
         email: str = payload.get("sub")
         if email is None:
@@ -97,7 +104,8 @@ def require_permission(resource: str, action: str):
 
 
 def get_client_ip(request: Request) -> Optional[str]:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.client.host if request.client else None

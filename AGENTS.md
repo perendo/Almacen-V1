@@ -39,7 +39,7 @@ H:\Almacen-V1\
 ├── Almacen.md          # Especificación funcional
 ├── PLAN.md             # Plan técnico aprobado (remediación de auditoría)
 ├── QUALITY_AND_TEST_REPORT.md  # Reporte de calidad y pruebas
-├── TEST_REPORT.md      # Reporte de pruebas de integración (pendiente de ejecutar con PostgreSQL)
+├── TEST_REPORT.md      # Reporte de integración y seguridad (42 + 113 pruebas)
 ├── README.md           # Documentación del proyecto
 ├── AGENTS.md           # Este archivo
 ├── LICENSE             # Licencia MIT
@@ -52,7 +52,10 @@ H:\Almacen-V1\
 │   │   ├── core/
 │   │   │   ├── config.py           # Pydantic Settings + .env (SECRET_KEY obligatoria, PostgreSQL)
 │   │   │   ├── database.py         # SQLAlchemy engine con pool PostgreSQL / check_same_thread SQLite
-│   │   │   └── security.py         # JWT, bcrypt, verify_password (roles y jti en tokens)
+│   │   │   ├── security.py         # JWT, bcrypt, verify_password (roles y jti en tokens)
+│   │   │   ├── tenancy.py          # Aislamiento multitenencia: scope_query, tenant_get, ensure_parent_in_tenant
+│   │   │   ├── audit.py            # log_audit_event + redacción de campos sensibles (sin commit)
+│   │   │   └── ratelimit.py        # RateLimiter en memoria (interfaz sustituible por Redis)
 │   │   ├── api/
 │   │   │   ├── deps.py             # get_db, get_current_user, require_role, require_permission (JOIN único, sin N+1)
 │   │   │   └── v1/
@@ -68,10 +71,18 @@ H:\Almacen-V1\
 │   ├── .env                        # Configuración de desarrollo (PostgreSQL)
 │   ├── .env.example                # Ejemplo de configuración
 │   ├── requirements.txt            # Dependencias Python (incluye psycopg[binary])
-│   └── tests_integration.py        # Pruebas de integración (requieren servidor levantado)
-│   └── tests/                      # Scripts de prueba auxiliares
-│       ├── run_complete_test.py    # Pruebas completas de API (levantar servidor + pruebas)
-│       └── run_pytest.py           # Ejecutar pytest contra el servidor levantado
+│   ├── Dockerfile                  # Imagen de la API (migraciones + seed + uvicorn)
+│   ├── pytest.ini                  # testpaths=tests + configuración de asyncio
+│   └── tests/
+│       ├── README.md               # Instrucciones de ejecución
+│       ├── test_integration.py     # 42 pruebas de contrato (servidor levantado)
+│       └── test_security.py        # 113 pruebas de seguridad y aislamiento
+├── Docs/
+│   ├── matriz-tenant.md            # Matriz de aislamiento por módulo y evidencia
+│   └── adr/                        # ADR-001 auditoría, ADR-002 rate limit, ADR-003 licencia, ADR-004 tenencia
+├── docker-compose.yml              # API + PostgreSQL (healthchecks)
+├── .github/workflows/ci.yml        # CI: PostgreSQL + migraciones + 155 pruebas + build frontend
+├── CHANGELOG.md                    # Historial de cambios
 ├── frontend/                       # App Next.js
 │   ├── app/
 │   │   ├── layout.tsx              # Layout raíz
@@ -80,38 +91,44 @@ H:\Almacen-V1\
 │   │   ├── middleware.ts           # Protección de rutas por sesión/rol
 │   │   ├── (auth)/                 # Grupo de autenticación
 │   │   │   └── login/page.tsx      # Login
-│   │   └── (dashboard)/            # Grupo de aplicación principal
-│   │       ├── layout.tsx          # Sidebar, navbar, AuthProvider
-│   │       ├── page.tsx            # Dashboard con KPIs y alertas (datos reales)
-│   │       ├── companies/          # Empresas (SuperAdmin)
-│   │       ├── centers/            # Centros
-│   │       ├── warehouses/         # Almacenes
-│   │       ├── zones/              # Zonas
-│   │       ├── aisles/             # Pasillos
-│   │       ├── shelves/            # Estanterías
-│   │       ├── bins/               # Huecos/Bins
-│   │       ├── users/              # Usuarios y roles
-│   │       ├── roles/              # Roles y permisos (RBAC)
-│   │       ├── articles/           # Maestros de artículos (datos reales)
-│   │       ├── article-families/   # Familias
-│   │       ├── article-brands/     # Marcas
-│   │       ├── uoms/               # Unidades de medida
-│   │       ├── stock/              # Stock por ubicación (datos reales)
-│   │       ├── movements/          # Movimientos de stock
-│   │       ├── lots/               # Lotes
-│   │       ├── serials/            # Números de serie (trazabilidad)
-│   │       ├── inventory/          # Inventarios físicos
-│   │       ├── adjustments/        # Ajustes y mermas
-│   │       ├── alerts/             # Alertas
-│   │       ├── reports/            # Informes y KPIs
-│   │       └── audit/              # Logs de auditoría
+│   │   ├── (dashboard)/            # Grupo de aplicación principal
+│   │   │   ├── layout.tsx          # Sidebar, navbar, AuthProvider, Footer
+│   │   │   ├── page.tsx            # Dashboard con KPIs y alertas (datos reales)
+│   │   │   ├── companies/          # Empresas (SuperAdmin)
+│   │   │   ├── centers/            # Centros
+│   │   │   ├── warehouses/         # Almacenes
+│   │   │   ├── zones/              # Zonas
+│   │   │   ├── aisles/             # Pasillos
+│   │   │   ├── shelves/            # Estanterías
+│   │   │   ├── bins/               # Huecos/Bins
+│   │   │   ├── users/              # Usuarios y roles
+│   │   │   ├── roles/              # Roles y permisos (RBAC)
+│   │   │   ├── articles/           # Maestros de artículos (datos reales)
+│   │   │   ├── article-families/   # Familias
+│   │   │   ├── article-brands/     # Marcas
+│   │   │   ├── uoms/               # Unidades de medida
+│   │   │   ├── stock/              # Stock por ubicación (datos reales)
+│   │   │   ├── movements/          # Movimientos de stock
+│   │   │   ├── lots/               # Lotes
+│   │   │   ├── serials/            # Números de serie (trazabilidad)
+│   │   │   ├── inventory/          # Inventarios físicos
+│   │   │   ├── adjustments/        # Ajustes y mermas
+│   │   │   ├── alerts/             # Alertas
+│   │   │   ├── reports/            # Informes y KPIs
+│   │   │   └── audit/              # Logs de auditoría (solo lectura)
+│   │   ├── terminos/               # Legal pública (server component)
+│   │   ├── privacidad/             # Legal pública (RGPD/LOPDGDD)
+│   │   └── aviso-legal/            # Legal pública + limitación de responsabilidad
 │   ├── components/
-│   │   ├── ui/                     # shadcn/ui base (incluye skeleton.tsx)
-│   │   ├── layout/                 # Sidebar, Navbar
+│   │   ├── ui/                     # shadcn/ui base + skeleton, empty-state, error-state, pagination
+│   │   ├── layout/                 # Sidebar, Navbar, Footer
+│   │   ├── legal/                  # Layout reutilizable de páginas legales
+│   │   ├── role-guard.tsx          # Defensa en profundidad por rol (roles de /auth/me)
 │   │   └── auth-provider.tsx       # Contexto de autenticación JWT (carga /auth/me)
 │   ├── lib/
-│   │   ├── api.ts                  # Servicio fetch con auth, interceptor 401 + refresh, ApiError
-│   │   ├── auth.ts                 # Helpers de sesión (token, logout, decodeJWT)
+│   │   ├── api.ts                  # Servicio fetch con auth, interceptor 401 + refresh (query o body), ApiError
+│   │   ├── auth.ts                 # Helpers de sesión (token, logout, decodeJWT, roles cacheados)
+│   │   ├── legal.ts                # Fetch server-side de textos legales con fallback local
 │   │   └── utils.ts                # cn(), formatCurrency, formatDate, etc.
 │   ├── hooks/
 │   │   ├── useAuth.tsx             # Hook de autenticación
@@ -201,12 +218,14 @@ npm run dev
 - Usar **Pydantic v2** para validación de datos.
 - Configurar CORS restrictivo para permitir peticiones únicamente desde `http://localhost:3000`.
 - Cada endpoint debe verificarse con `uvicorn main:app --reload` para confirmar que arranca sin errores de sintaxis.
-- **Multitenencia:** casi todas las tablas llevan `company_id` NOT NULL; el aislamiento se filtra en cada consulta (solo SuperAdmin puede consultar otra empresa).
-- **Auditoría:** cada mutación escribe en `audit_logs` con `user_id`, `timestamp`, `IP`, `acción` y `valores_previos/nuevos`.
+- **Multitenencia:** usar SIEMPRE `app/core/tenancy.py` (`scope_query`, `tenant_get`, `ensure_parent_in_tenant`). Prohibido filtrar `company_id` a mano en endpoints. Recurso ajeno → **404**.
+- **Auditoría:** toda mutación llama a `log_audit_event()` antes del `db.commit()`; sin auditoría no hay commit. El helper redacta campos sensibles.
 - **SECRET_KEY:** obligatoria por variable de entorno, mínimo 32 caracteres, sin valor por defecto inseguro.
-- **Stock:** operaciones de lectura/escritura usan `with_for_update()` (bloqueo pesimista); las salidas reducen `stock.quantity`.
+- **Stock:** operaciones de lectura/escritura usan `with_for_update()` (bloqueo pesimista); las salidas reducen `stock.quantity`; aritmética con `Decimal` (nunca `Decimal ± float`).
+- **Serialización:** las respuestas de mutación con modelos ORM se convierten con `StockOut.model_validate(...).model_dump(mode="json")` o esquemas equivalentes.
 - **Fechas:** usar `datetime.now(timezone.utc)` en lugar de `datetime.utcnow()` (deprecado).
-- **Migraciones:** esquema gestionado exclusivamente con Alembic (`alembic upgrade head`); `create_all()` solo en desarrollo vía `lifespan`.
+- **Migraciones:** esquema gestionado exclusivamente con Alembic (`python -m alembic upgrade head`); `create_all()` solo en desarrollo vía `lifespan`.
+- **Rate limiting:** login cuenta solo intentos fallidos (`LOGIN_RATE_LIMIT`, por defecto 10/60 s). En multi-worker requiere Redis. `X-Forwarded-For` solo se confía con `TRUST_PROXY_HEADERS=true` (detrás de un proxy propio).
 
 ### Frontend
 - Usar **TypeScript estricto** para evitar errores en tiempo de ejecución.
@@ -235,11 +254,11 @@ npm run dev
 | Maestros | `/api/v1/articles`, `/article-families`, `/article-brands`, `/uoms` | Artículos, familias, marcas, UOM |
 | Trazabilidad | `/api/v1/lots`, `/serials` | Lotes, números de serie |
 | Stock | `/api/v1/stock` | Stock, entrada (`/entry`), salida (`/exit`), traslado interno (`/internal-transfer`), movimientos |
-| Inventario | `/api/v1/inventory-counts` | Conteos, líneas (con paginación), completar, aprobar |
+| Inventario | `/api/v1/inventory-counts` | Conteos y líneas (alta y consulta; completar/aprobar pendiente) |
 | Ajustes | `/api/v1/adjustments` | Mermas, regularizaciones |
 | Alertas | `/api/v1/alerts` | Stock mínimo, caducidad, reabastecimiento |
 | Auditoría | `/api/v1/audit-logs` | Logs de auditoría (Auditor/SuperAdmin) |
-| Reportes | `/api/v1/reports` | Valoración, rotación, KPIs, exportación |
+| Reportes | `/api/v1/reports` | Valoración, rotación, KPIs; export CSV solo valoración (resto 501) |
 
 ---
 
@@ -248,10 +267,12 @@ npm run dev
 ### Backend
 ```powershell
 cd H:\Almacen-V1\backend
-pytest tests_integration.py -v
+python -m pytest tests/test_integration.py -v   # 42 pruebas de contrato
+python -m pytest tests/test_security.py -v      # 113 pruebas de seguridad y aislamiento
 ```
 
-> Requiere servidor PostgreSQL y FastAPI levantados. Objetivo: 42/42 pruebas verdes.
+> Requiere servidor PostgreSQL y FastAPI levantados en `http://127.0.0.1:8000`.
+> Objetivo actual: **155/155 pruebas verdes** (42 + 113).
 
 ### Frontend
 ```powershell
@@ -274,5 +295,5 @@ npm run lint       # Verifica linting
 
 ---
 
-**Estado del proyecto:** ✅ Todas las pruebas de integración pasadas (42/42). Correcciones de auditoría aplicadas y verificadas con PostgreSQL.  
-**Última actualización:** 11 de noviembre de 2026
+**Estado del proyecto:** ✅ 155/155 pruebas verdes (42 integración + 113 seguridad). Aislamiento multitenencia, auditoría activa, rate limiting, refresh rotatorio, frontend sin mocks y páginas legales verificados con PostgreSQL.  
+**Última actualización:** 11 de noviembre de 2026 (v1.1.0)

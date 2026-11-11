@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
+from app.api.deps import get_db, require_role
+from app.core.tenancy import ensure_parent_in_tenant, scope_query, tenant_get
 from app.models.base import Aisle, Zone
 from app.schemas import AisleBase, AisleCreate, AisleUpdate, AisleOut
 
@@ -17,7 +18,7 @@ def read_aisles(
     zone_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Aisle)
+    query = scope_query(db.query(Aisle), Aisle, current_user)
     if zone_id:
         query = query.filter(Aisle.zone_id == zone_id)
     return query.offset(skip).limit(limit).all()
@@ -29,9 +30,7 @@ def create_aisle(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    zone = db.query(Zone).filter(Zone.id == aisle_in.zone_id).first()
-    if not zone:
-        raise HTTPException(status_code=404, detail="Zona no encontrada")
+    ensure_parent_in_tenant(db, Zone, aisle_in.zone_id, current_user, "Zona no encontrada")
     aisle = Aisle(**aisle_in.model_dump())
     db.add(aisle)
     db.commit()
@@ -45,10 +44,7 @@ def read_aisle(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    aisle = db.query(Aisle).filter(Aisle.id == aisle_id).first()
-    if not aisle:
-        raise HTTPException(status_code=404, detail="Pasillo no encontrado")
-    return aisle
+    return tenant_get(db, Aisle, aisle_id, current_user, "Pasillo no encontrado")
 
 
 @router.put("/{aisle_id}", response_model=AisleOut, tags=["aisles"])
@@ -58,10 +54,11 @@ def update_aisle(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    aisle = db.query(Aisle).filter(Aisle.id == aisle_id).first()
-    if not aisle:
-        raise HTTPException(status_code=404, detail="Pasillo no encontrado")
-    for field, value in aisle_in.model_dump(exclude_unset=True).items():
+    aisle = tenant_get(db, Aisle, aisle_id, current_user, "Pasillo no encontrado")
+    data = aisle_in.model_dump(exclude_unset=True)
+    if "zone_id" in data and data["zone_id"] != aisle.zone_id:
+        ensure_parent_in_tenant(db, Zone, data["zone_id"], current_user, "Zona no encontrada")
+    for field, value in data.items():
         setattr(aisle, field, value)
     db.add(aisle)
     db.commit()
@@ -75,9 +72,7 @@ def delete_aisle(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    aisle = db.query(Aisle).filter(Aisle.id == aisle_id).first()
-    if not aisle:
-        raise HTTPException(status_code=404, detail="Pasillo no encontrado")
+    aisle = tenant_get(db, Aisle, aisle_id, current_user, "Pasillo no encontrado")
     db.delete(aisle)
     db.commit()
     return {"detail": "Pasillo eliminado correctamente"}

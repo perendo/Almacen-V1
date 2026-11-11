@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import ArticleSubfamily
+from app.api.deps import get_db, require_role
+from app.core.tenancy import ensure_parent_in_tenant, scope_query
+from app.models.base import ArticleFamily, ArticleSubfamily
 from app.schemas import (
     ArticleSubfamilyBase,
     ArticleSubfamilyCreate,
@@ -22,7 +23,7 @@ def read_article_subfamilies(
     family_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(ArticleSubfamily)
+    query = scope_query(db.query(ArticleSubfamily), ArticleSubfamily, current_user)
     if family_id:
         query = query.filter(ArticleSubfamily.family_id == family_id)
     return query.offset(skip).limit(limit).all()
@@ -34,6 +35,7 @@ def create_article_subfamily(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
+    ensure_parent_in_tenant(db, ArticleFamily, subfamily_in.family_id, current_user, "Familia no encontrada")
     subfamily = ArticleSubfamily(**subfamily_in.model_dump())
     db.add(subfamily)
     db.commit()

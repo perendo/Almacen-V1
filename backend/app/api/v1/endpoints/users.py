@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import User, Role, UserRole
+from app.api.deps import get_db, require_role
+from app.core.audit import log_audit_event
+from app.core.security import get_password_hash
+from app.models.base import User, Role, UserRole, Permission
 from app.schemas import (
     UserCreate,
     UserUpdate,
@@ -35,6 +37,18 @@ def _is_manager(user: User) -> bool:
     return "Gerente de Almacén" in _user_roles_names(user)
 
 
+def _user_out(user: User) -> UserOut:
+    """Serializa un usuario incluyendo sus roles (campo no mapeado en el ORM)."""
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        company_id=user.company_id,
+        roles=_user_roles_names(user),
+    )
+
+
 # ============================================
 # USUARIOS
 # ============================================
@@ -49,29 +63,26 @@ def read_users(
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
     query = db.query(User)
-    user_roles = _user_roles_names(current_user)
 
     # Aislamiento multitenencia: solo SuperAdmin puede consultar otra empresa
-    if "SuperAdmin" in user_roles:
+    if _is_superadmin(current_user):
         if company_id is not None:
             query = query.filter(User.company_id == company_id)
     else:
-        # Gerente y resto: forzar a su propia empresa
         query = query.filter(User.company_id == current_user.company_id)
 
     if is_active is not None:
         query = query.filter(User.is_active == is_active)
-    return query.offset(skip).limit(limit).all()
+    return [_user_out(user) for user in query.offset(skip).limit(limit).all()]
 
 
 @router.post("/", response_model=UserOut, status_code=status.HTTP_201_CREATED, tags=["users"])
 def create_user(
     user_in: UserCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin"])),
 ) -> Any:
-    from app.core.security import get_password_hash
-
     existing = db.query(User).filter(User.email == user_in.email).first()
     if existing:
         raise HTTPException(
@@ -79,7 +90,6 @@ def create_user(
             detail="El email ya está registrado",
         )
 
-    # Solo SuperAdmin puede crear usuarios; company_id del creador o del payload
     company_id = user_in.company_id or current_user.company_id
 
     user = User(
@@ -92,48 +102,35 @@ def create_user(
     db.add(user)
     db.flush()
 
-    # Asignar roles
     for role_id in user_in.role_ids:
         role = db.query(Role).filter(Role.id == role_id).first()
         if role:
             user_role = UserRole(user_id=user.id, role_id=role_id, company_id=user.company_id)
             db.add(user_role)
 
+    log_audit_event(
+        db,
+        action="create",
+        entity_type="User",
+        entity_id=user.id,
+        current_user=current_user,
+        request=request,
+        description=f"Alta de usuario {user.email}",
+        new_values={"email": user.email, "company_id": company_id, "role_ids": user_in.role_ids},
+    )
     db.commit()
     db.refresh(user)
-    roles = _user_roles_names(user)
-    return UserOut.model_validate(user, update={"roles": roles})
-
-
-@router.get("/{user_id}", response_model=UserOut, tags=["users"])
-def read_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
-) -> Any:
-    user_roles = _user_roles_names(current_user)
-    query = db.query(User).filter(User.id == user_id)
-
-    if "SuperAdmin" not in user_roles:
-        query = query.filter(User.company_id == current_user.company_id)
-
-    user = query.first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    roles = _user_roles_names(user)
-    return UserOut.model_validate(user, update={"roles": roles})
+    return _user_out(user)
 
 
 @router.put("/{user_id}", response_model=UserOut, tags=["users"])
 def update_user(
     user_id: int,
     user_in: UserUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    from app.core.security import get_password_hash
-
-    user_roles = _user_roles_names(current_user)
     is_superadmin = _is_superadmin(current_user)
     is_manager = _is_manager(current_user)
 
@@ -145,34 +142,55 @@ def update_user(
     if not is_superadmin:
         if not is_manager or target_user.company_id != current_user.company_id:
             raise HTTPException(status_code=403, detail="No autorizado")
-        # El gerente no puede modificar a un SuperAdmin
         target_roles = _user_roles_names(target_user)
         if "SuperAdmin" in target_roles:
             raise HTTPException(status_code=403, detail="No puede modificar a un SuperAdmin")
-        # El gerente no puede auto-asignarse roles superiores ni cambiar company_id a otra empresa
         if user_in.company_id is not None and user_in.company_id != current_user.company_id:
             raise HTTPException(status_code=403, detail="No puede cambiar la empresa del usuario")
 
-    for field, value in user_in.model_dump(exclude_unset=True).items():
+    data = user_in.model_dump(exclude_unset=True)
+    previous = {field: ("[REDACTED]" if field == "password" else getattr(target_user, field)) for field in data}
+    for field, value in data.items():
         if field == "password" and value:
             value = get_password_hash(value)
         setattr(target_user, field, value)
     db.add(target_user)
+    log_audit_event(
+        db,
+        action="update",
+        entity_type="User",
+        entity_id=target_user.id,
+        current_user=current_user,
+        request=request,
+        description=f"Modificación de usuario {target_user.email}",
+        old_values=previous,
+        new_values=data,
+    )
     db.commit()
     db.refresh(target_user)
-    roles = _user_roles_names(target_user)
-    return UserOut.model_validate(target_user, update={"roles": roles})
+    return _user_out(target_user)
 
 
 @router.delete("/{user_id}", tags=["users"])
 def delete_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin"])),
 ) -> Any:
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    log_audit_event(
+        db,
+        action="delete",
+        entity_type="User",
+        entity_id=user.id,
+        current_user=current_user,
+        request=request,
+        description=f"Baja de usuario {user.email}",
+        old_values={"email": user.email, "company_id": user.company_id},
+    )
     db.delete(user)
     db.commit()
     return {"detail": "Usuario eliminado correctamente"}
@@ -180,6 +198,7 @@ def delete_user(
 
 # ============================================
 # ROLES
+# Son rutas estáticas y deben declararse ANTES de /{user_id}.
 # ============================================
 
 @router.get("/roles", response_model=List[RoleOut], tags=["roles"])
@@ -196,7 +215,6 @@ def create_role(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin"])),
 ) -> Any:
-    # Reservar creación de roles estrictamente a SuperAdmins
     role = Role(**role_in.model_dump())
     db.add(role)
     db.commit()
@@ -242,20 +260,40 @@ def create_permission(
 
 
 # ============================================
+# DETALLE DE USUARIO
+# Ruta dinámica al final para no capturar /roles ni /permissions.
+# ============================================
+
+@router.get("/{user_id}", response_model=UserOut, tags=["users"])
+def read_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
+) -> Any:
+    query = db.query(User).filter(User.id == user_id)
+    if not _is_superadmin(current_user):
+        query = query.filter(User.company_id == current_user.company_id)
+
+    user = query.first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return _user_out(user)
+
+
+# ============================================
 # USER ROLES (asignación)
 # ============================================
 
 @router.post("/user-roles", response_model=UserRoleOut, status_code=status.HTTP_201_CREATED, tags=["user-roles"])
 def assign_user_role(
     ur_in: UserRoleCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    user_roles = _user_roles_names(current_user)
     is_superadmin = _is_superadmin(current_user)
     is_manager = _is_manager(current_user)
 
-    # Verificar que el usuario objetivo existe y pertenece a la empresa (si no es SuperAdmin)
     target_user = db.query(User).filter(User.id == ur_in.user_id).first()
     if not target_user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -263,11 +301,9 @@ def assign_user_role(
     if not is_superadmin:
         if not is_manager or target_user.company_id != current_user.company_id:
             raise HTTPException(status_code=403, detail="No autorizado")
-        # El gerente no puede asignar el rol SuperAdmin
         role = db.query(Role).filter(Role.id == ur_in.role_id).first()
         if role and role.name == "SuperAdmin":
             raise HTTPException(status_code=403, detail="No puede asignar el rol SuperAdmin")
-        # company_id del user_role debe ser la empresa del gerente
         if ur_in.company_id is not None and ur_in.company_id != current_user.company_id:
             raise HTTPException(status_code=403, detail="No puede asignar roles de otra empresa")
 
@@ -288,6 +324,16 @@ def assign_user_role(
         )
     user_role = UserRole(**ur_in.model_dump())
     db.add(user_role)
+    log_audit_event(
+        db,
+        action="assign_role",
+        entity_type="UserRole",
+        entity_id=target_user.id,
+        current_user=current_user,
+        request=request,
+        description=f"Asignación de rol {ur_in.role_id} a {target_user.email}",
+        new_values={"user_id": ur_in.user_id, "role_id": ur_in.role_id, "company_id": ur_in.company_id},
+    )
     db.commit()
     db.refresh(user_role)
     return user_role

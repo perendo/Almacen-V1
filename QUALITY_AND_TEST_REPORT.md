@@ -1,156 +1,143 @@
-# 📋 QUALITY_AND_TEST_REPORT — WMS Almacen-V1
+# QUALITY_AND_TEST_REPORT — WMS Almacen-V1
 
-**Proyecto:** WMS — Módulo de Gestión de Almacén e Inventario  
-**Fecha:** 11 de noviembre de 2026  
-**Estado:** ✅ VERDE — Todas las pruebas de calidad y integración pasadas  
-**Motor de BD:** PostgreSQL 18  
-
----
-
-## 1. Resumen Ejecutivo
-
-Se aplicó el Protocolo de Endurecimiento de Calidad sobre las correcciones de la auditoría técnica (`auditoria.md`). Todas las 42 pruebas de integración pasaron exitosamente. Los contratos de tipado TypeScript ↔ Pydantic v2 coinciden exactamente. El backend arranca correctamente con PostgreSQL y todos los endpoints críticos funcionan.
+**Proyecto:** WMS — Módulo de Gestión de Almacén e Inventario
+**Fecha:** 11 de noviembre de 2026
+**Versión:** 1.1.0
+**Base:** `auditoria.md` (dictamen inicial 42/100, RIESGO ALTO/CRÍTICO)
+**Dictamen de esta revisión:** **riesgo residual BAJO** — 0 hallazgos críticos
+abiertos en el código revisado; quedan limitaciones funcionales documentadas.
 
 ---
 
-## 2. Resultados de Pruebas de Integración (pytest)
+## 1. Resumen ejecutivo
 
-**Resultado: 42/42 PASSED** ✅
+Se ejecutó el plan de remediación `PLAN.md` v2 sobre 27 routers, el núcleo de
+seguridad y el frontend. Resultado verificado:
 
-| Clase de prueba | Pruebas | Estado |
-|-----------------|---------|--------|
-| TestAuth | 7 | ✅ |
-| TestCompanies | 3 | ✅ |
-| TestCenters | 1 | ✅ |
-| TestWarehouses | 1 | ✅ |
-| TestZones | 1 | ✅ |
-| TestAisles | 1 | ✅ |
-| TestShelves | 1 | ✅ |
-| TestBins | 1 | ✅ |
-| TestUsers | 1 | ✅ |
-| TestRoles | 1 | ✅ |
-| TestPermissions | 1 | ✅ |
-| TestUserRoles | 1 | ✅ |
-| TestArticleFamilies | 1 | ✅ |
-| TestArticleSubfamilies | 1 | ✅ |
-| TestArticleBrands | 1 | ✅ |
-| TestArticles | 2 | ✅ |
-| TestUoms | 1 | ✅ |
-| TestLots | 1 | ✅ |
-| TestSerials | 1 | ✅ |
-| TestStock | 1 | ✅ |
-| TestInventoryCounts | 1 | ✅ |
-| TestAdjustments | 1 | ✅ |
-| TestAlerts | 1 | ✅ |
-| TestAuditLogs | 1 | ✅ |
-| TestReports | 3 | ✅ |
-| TestNotFound | 1 | ✅ |
-| TestCORS | 1 | ✅ |
-| TestTipado | 4 | ✅ |
-
-**Total: 42 pruebas, 42 pasadas, 0 falladas**
+| Métrica | Resultado |
+|---------|-----------|
+| Pruebas de integración | **42/42** |
+| Pruebas de seguridad y aislamiento | **113/113** |
+| Total | **155/155** |
+| `npm run build` / `npm run lint` | ✅ / ✅ |
+| Migraciones | `0001` + `0002`, `alembic check` sin drift |
+| Endpoints en OpenAPI | 69 rutas |
+| Fugas multitenencia detectadas en pruebas | **0** |
+| Saldos negativos en prueba concurrente | **0** |
+| Mutaciones críticas sin evento de auditoría | **0** en las rutas cubiertas |
 
 ---
 
-## 3. Contratos de Tipado (TypeScript vs Pydantic v2)
+## 2. Cierre de hallazgos de `auditoria.md`
 
-| Interfaz | Campos Backend | Campos Frontend | Estado |
-|----------|---------------|----------------|--------|
-| `UserOut` | 6 | 6 | ✅ Coinciden exactamente |
-| `StockOut` | 13 | 13 | ✅ Coinciden exactamente (tras añadir `company_id`) |
-| `Article`/`ArticleOut` | 18 | 18 | ✅ Coinciden exactamente |
-
----
-
-## 4. Correcciones Aplicadas (Fase 1 — Hotfixes Críticos)
-
-| ID | Hallazgo (auditoria.md) | Acción | Archivos | Estado |
-|----|------------------------|--------|----------|--------|
-| HOT-01 | [SEC-01] BOLA / Fuga multitenencia | Filtro `current_user.company_id` en todos los endpoints de artículos, stock, almacenes, centros. Solo SuperAdmin filtra por otra empresa. | `articles.py`, `stock.py`, `warehouses.py`, `centers.py`, `users.py` | ✅ Verificado (prueba aislamiento pasa) |
-| HOT-02 | [SEC-02] Escalada de privilegios | Gerente no puede asignar SuperAdmin, modificar SuperAdmin, ni cambiar company_id de otros. Solo SuperAdmin crea usuarios/roles. | `users.py` | ✅ |
-| HOT-03 | [SEC-03] Clave secreta hardcodeada | `SECRET_KEY` obligatoria por `.env`, validador de longitud ≥32, aborta si usa valor por defecto. | `config.py` | ✅ |
-| HOT-04 | [DATA-01] Race condition en stock | `with_for_update()` en lecturas/escrituras de stock; `CHECK` constraints `quantity >= 0` y `reserved_quantity >= 0`. | `stock.py`, `models/base.py`, migración Alembic | ✅ |
-| HOT-05 | [DATA-02] Salidas no reducen stock físico | `stock.quantity -= qty` en salida de stock (reducción atómica de cantidad física). | `stock.py` | ✅ |
-
----
-
-## 5. Correcciones Aplicadas (Fase 2 — Sincronización Frontend-Backend)
-
-| ID | Hallazgo | Acción | Archivos | Estado |
-|----|----------|--------|----------|--------|
-| SYNC-01 | [ARCH-01] JWT sin claim `roles` | Token incluye `roles` (lista de nombres de rol). Endpoint `/auth/me` retorna perfil completo con roles cargados explícitamente. | `auth.py`, `security.py`, `auth-provider.tsx`, `deps.py` | ✅ Verificado (pruebas /auth/me pasan) |
-| SYNC-02 | [ARCH-02] Rutas 404 en stock | Rutas corregidas: `/stock-movements/entry` → `/stock/entry`, `/stock-movements/exit` → `/stock/exit`, `/stock-movements/internal-transfer` → `/stock/internal-transfer`. | `hooks/useArticles.ts`, `hooks/useApi.ts` | ✅ |
-| SYNC-03 | [ARCH-03] Vistas mockeadas | Vistas de artículos, stock y dashboard conectadas a hooks React Query con datos reales, estados de carga (Skeleton) y manejo de errores. | `dashboard/articles/page.tsx`, `dashboard/stock/page.tsx`, `dashboard/page.tsx` | ✅ |
-| SYNC-04 | [ARCH-03] Expiración descoordinada | Interceptor en `api.ts` que ante 401 intenta `/auth/refresh` y reintenta la petición original. | `lib/api.ts` | ✅ |
+| ID | Hallazgo | Estado | Evidencia |
+|----|----------|--------|-----------|
+| SEC-01 | Aislamiento multitenencia incompleto (solo 4 módulos) | **Cerrado** | `app/core/tenancy.py`; 21 módulos; `TestTenantIsolation` (57 pruebas) |
+| SEC-02 | Escalada de privilegios en usuarios/roles | **Cerrado** | Guards en `users.py` y `user_roles.py`; `TestPrivileges` |
+| SEC-03 | Autoasignación de SuperAdmin | **Cerrado** | 403 verificado para Gerente |
+| SEC-04 | Revocación/rotación de tokens | **Cerrado** | Refresh rotatorio + `revoked_tokens`; `TestRefreshTokens` |
+| SEC-05 | Host header injection | **Cerrado** | `TrustedHostMiddleware`; host no permitido → 400 |
+| DATA-01 | Bloqueo pesimista y saldo negativo | **Cerrado** | `with_for_update` + `CHECK`; prueba concurrente |
+| DATA-02 | Semántica de salida de stock | **Cerrado** | La salida descuenta `quantity`; no deja reserva colgada |
+| DATA-03 | Restricciones `CHECK` en BD | **Cerrado** | Migración `0002`; `alembic check` |
+| ARCH-01/02 | Estructura y capas | **Cerrado** | Routers, core, schemas separados |
+| ARCH-03 / SYNC-03 | Vistas con datos mock | **Cerrado** | 8 vistas + listados conectados a la API real |
+| PERF-01..04 | Consultas N+1 / índices | **Verificado** | JOIN único en `deps.py`; índices en modelos; sin prueba de carga formal |
+| CODE-01 | Deuda de código | **Cerrado** | Rutas duplicadas/shadowing corregidas, imports limpiados |
+| CODE-02 | Auditoría inactiva (0 escrituras) | **Cerrado** | `log_audit_event` en mutaciones; `TestAudit` |
+| PROD-08 | Sin rate limiting | **Cerrado** | Login/refresh; `TestRateLimiting` |
+| INTEG-01 | `/stock/movements` → 422 | **Cerrado** | Ruta declarada antes de `/{article_id}`; 200 |
+| INTEG-02 | Contrato de stock por artículo | **Cerrado** | `GET /stock/{article_id}` → `List[StockOut]` |
+| FUNC-01 | Informes con ceros ficticios | **Cerrado** | Valoración/rotación/KPIs reales; export no soportado → 501 |
+| Legal UI | Sin páginas legales | **Cerrado** | `/terminos`, `/privacidad`, `/aviso-legal` + footer |
+| QA | Suite insuficiente (42 smoke) | **Cerrado** | +113 pruebas de seguridad |
 
 ---
 
-## 6. Correcciones Aplicadas (Fase 3 — Rendimiento y Producción)
+## 3. Cambios técnicos verificados
 
-| ID | Hallazgo | Acción | Archivos | Estado |
-|----|----------|--------|----------|--------|
-| PROD-01 | [PERF-01] N+1 en permisos RBAC | Consulta única con JOIN indexado en `require_permission`. | `deps.py` | ✅ |
-| PROD-02 | [PERF-02] PostgreSQL con pool | Motor cambiado a PostgreSQL con `psycopg[binary]`, `pool_size=20`, `max_overflow=10`, `pool_pre_ping=True`. | `database.py`, `config.py`, `.env`, `.env.example`, `requirements.txt`, `alembic.ini` | ✅ Verificado |
-| PROD-03 | [PERF-03] `create_all` en importación | Movido a evento `lifespan` solo en desarrollo; esquema gestionado con Alembic. | `main.py`, `alembic/versions/0001_initial_schema.py` | ✅ |
-| PROD-04 | [PERF-04] Falta de paginación | `skip`/`limit` con tope `le=500` en `inventory_count_lines` y otros endpoints. | `inventory_count_lines.py` | ✅ |
-| PROD-05 | [CODE-02] Auditoría vacía | Middleware de auditoría presente; tabla `audit_logs` en modelo y migración. | `main.py`, `models/base.py` | ✅ |
-| PROD-06 | [SEC-04] Refresh token sin revocación | Tabla `RevokedToken` con `jti`; rotación en `/refresh`; `/logout` invalida jti actual. | `auth.py`, `models/base.py` | ✅ |
-| PROD-07 | [CODE-01] `datetime.utcnow()` deprecado | Sustituido por `datetime.now(timezone.utc)`. | `stock.py`, `security.py` | ✅ |
-| PROD-08 | Rate limiting | Endpoints legales `/terminos`, `/privacidad`, `/aviso-legal` añadidos. | `main.py` | ✅ |
+### 3.1 Backend
 
----
+- **Tenencia centralizada:** `scope_query`, `tenant_get`, `ensure_parent_in_tenant`.
+  Los modelos sin `company_id` usan cadena de joins declarativa.
+- **Auditoría atómica:** `log_audit_event()` añade el evento a la misma sesión y
+  se confirma con la mutación. Redacta `password`, `token`, `secret`, `jti`.
+- **Rate limiting:** solo fallos de login; `429` + `Retry-After`; límites
+  configurables por entorno.
+- **Refresh tokens:** rotación con `jti`, detección de reuso y revocación en
+  logout (query o cuerpo JSON).
+- **Stock:** `SELECT … FOR UPDATE`, aritmética `Decimal`, `CHECK` de no
+  negatividad y coherencia reserva ≤ cantidad.
+- **Serialización:** respuestas de mutación con `StockOut.model_validate(...)
+  .model_dump(mode="json")`; corrige el error de serialización de ORM.
+- **Rutas:** `/stock/movements` antes de `/{article_id}`; rutas estáticas de
+  usuarios/roles antes de `/{user_id}`.
+- **Cabeceras:** CSP, `X-Frame-Options`, `nosniff`, `Referrer-Policy`,
+  `Permissions-Policy`, `X-Request-ID`; HSTS en producción.
+- **Configuración:** `SECRET_KEY` obligatoria (≥32, sin marcadores débiles),
+  SQLite bloqueado en producción, `ALLOWED_HOSTS` configurable.
+- **Informes:** valoración con último coste activo (sin N+1), rotación por
+  salidas, KPIs reales.
+- **Schema drift:** `alembic check` → `No new upgrade operations detected.`
 
-## 7. Documentación Legal
+### 3.2 Frontend
 
-| Archivo | Descripción | Estado |
-|---------|-------------|--------|
-| `LICENSE` | Licencia MIT | ✅ Mantenida |
-| `DISCLAIMER.md` | Aviso de responsabilidad | ✅ Creado |
-| `TERMS.md` | Términos y Condiciones de Uso | ✅ Creado |
-| `PLAN.md` | Plan técnico aprobado | ✅ Actualizado |
-| `main.py` | Endpoints públicos `/terminos`, `/privacidad`, `/aviso-legal` | ✅ Implementados |
-
----
-
-## 8. Verificación de Calidad
-
-| Criterio | Estado | Observación |
-|----------|--------|-------------|
-| `tsc --noEmit` (frontend) | ✅ | 0 errores TypeScript |
-| `py_compile` (backend) | ✅ | Todos los archivos compilan |
-| `pytest tests_integration.py` | ✅ | 42/42 pasadas |
-| CORS preflight | ✅ | Verificado para `http://localhost:3000` |
-| Tipado TS ↔ Pydantic | ✅ | UserOut, StockOut, Article coinciden |
-| Endpoints 401/403/404/422 | ✅ | Verificados en código y pruebas |
-| Manejo de errores 4xx/5xx | ✅ | `ApiError` en frontend, HTTPException en backend |
-| Interceptor 401 + refresh | ✅ | Implementado en `lib/api.ts` |
+- 8 vistas antes con mocks ahora consumen la API real, con estados de carga,
+  error con reintento, vacío explícito y paginación.
+- Formulario de salida con catálogos reales (artículos, almacenes, bins, lotes,
+  series, UOM) y visualización del `detail` del backend.
+- `RoleGuard` basado en roles de `/auth/me`, con JWT como respaldo.
+- Logout revoca el refresh token en servidor (best-effort).
+- Páginas legales públicas y footer en landing, login y dashboard.
+- Diseño M3/Antifatiga: sin `#FFFFFF` ni `#000000` en superficies/texto.
 
 ---
 
-## 9. Cómo Reproducir las Pruebas
+## 4. Evidencia de pruebas
 
-```powershell
-# 1. Levantar PostgreSQL y configurar .env
-# 2. Ejecutar migraciones
-cd H:\Almacen-V1\backend
-python -m alembic upgrade head
+```text
+tests/test_integration.py .......................................... [100%]
+42 passed
 
-# 3. Ejecutar seed
-python seed.py
+tests/test_security.py ............................................. [ 63%]
+.............................................................. [100%]
+113 passed
 
-# 4. Levantar servidor
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-# 5. Ejecutar pruebas de integración
-pytest tests_integration.py -v
-
-# 6. Verificar frontend
-cd H:\Almacen-V1\frontend
-npm run build
-npm run lint
+next lint: ✔ No ESLint warnings or errors
+next build: ✓ Compiled successfully (32 rutas)
+alembic check: No new upgrade operations detected.
 ```
 
+Detalle por área en `TEST_REPORT.md` y matriz por módulo en
+`Docs/matriz-tenant.md`.
+
 ---
 
-**Última actualización:** 11 de noviembre de 2026  
-**Estado general:** ✅ VERDE — Todas las verificaciones de calidad y pruebas de integración pasadas
+## 5. Riesgos residuales y limitaciones
+
+| Riesgo | Nivel | Mitigación / estado |
+|--------|-------|---------------------|
+| Rate limiter en memoria (multi-worker) | Medio | Interfaz preparada; migrar a Redis antes de escalar |
+| Exportación solo de valoración | Bajo | `501` explícito; resto de informes en JSON |
+| Sin endpoints completar/aprobar inventario | Bajo | Documentado; no se muestran acciones no implementadas |
+| Sin prueba de carga formal (QA-07) | Medio | Bloqueo pesimista e índices verificados; medir p95 en entorno real |
+| Credenciales de seed de demostración | Medio | Rotar en despliegue; no usar en producción |
+| Catálogos RBAC globales | Bajo | Decisión de diseño (ADR-004); asignaciones sí por empresa |
+
+No se declara una re-auditoría externa independiente: este informe refleja la
+verificación automatizada y la revisión de código del equipo. Para el cierre
+formal debe ejecutarse la re-auditoría de la Fase 7 de `PLAN.md`.
+
+---
+
+## 6. Conclusión
+
+Los hallazgos **críticos y altos** de `auditoria.md` tratados en este ciclo
+quedan cerrados con evidencia automatizada. El sistema pasa de un dictamen de
+42/100 (RIESGO ALTO/CRÍTICO) a un estado de **riesgo residual bajo**, con las
+limitaciones anteriores explícitamente documentadas y sin afirmaciones de
+cumplimiento normativo automático.
+
+**Recomendación:** desplegar en producción solo tras (1) rotar credenciales,
+(2) migrar el rate limiting a Redis si habrá más de un worker, y (3) ejecutar
+la prueba de carga y la re-auditoría externa de la Fase 7.

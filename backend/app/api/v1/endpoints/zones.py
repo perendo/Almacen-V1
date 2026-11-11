@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import Zone, Warehouse
+from app.api.deps import get_db, require_role
+from app.core.tenancy import ensure_parent_in_tenant, scope_query, tenant_get
+from app.models.base import Warehouse, Zone
 from app.schemas import ZoneBase, ZoneCreate, ZoneUpdate, ZoneOut
 
 router = APIRouter()
@@ -19,7 +20,7 @@ def read_zones(
     is_active: Optional[bool] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Zone)
+    query = scope_query(db.query(Zone), Zone, current_user)
     if warehouse_id:
         query = query.filter(Zone.warehouse_id == warehouse_id)
     if type:
@@ -35,9 +36,7 @@ def create_zone(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    warehouse = db.query(Warehouse).filter(Warehouse.id == zone_in.warehouse_id).first()
-    if not warehouse:
-        raise HTTPException(status_code=404, detail="Almacén no encontrado")
+    ensure_parent_in_tenant(db, Warehouse, zone_in.warehouse_id, current_user, "Almacén no encontrado")
     zone = Zone(**zone_in.model_dump())
     db.add(zone)
     db.commit()
@@ -51,10 +50,7 @@ def read_zone(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    zone = db.query(Zone).filter(Zone.id == zone_id).first()
-    if not zone:
-        raise HTTPException(status_code=404, detail="Zona no encontrada")
-    return zone
+    return tenant_get(db, Zone, zone_id, current_user, "Zona no encontrada")
 
 
 @router.put("/{zone_id}", response_model=ZoneOut, tags=["zones"])
@@ -64,10 +60,11 @@ def update_zone(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    zone = db.query(Zone).filter(Zone.id == zone_id).first()
-    if not zone:
-        raise HTTPException(status_code=404, detail="Zona no encontrada")
-    for field, value in zone_in.model_dump(exclude_unset=True).items():
+    zone = tenant_get(db, Zone, zone_id, current_user, "Zona no encontrada")
+    data = zone_in.model_dump(exclude_unset=True)
+    if "warehouse_id" in data and data["warehouse_id"] != zone.warehouse_id:
+        ensure_parent_in_tenant(db, Warehouse, data["warehouse_id"], current_user, "Almacén no encontrado")
+    for field, value in data.items():
         setattr(zone, field, value)
     db.add(zone)
     db.commit()
@@ -81,9 +78,7 @@ def delete_zone(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    zone = db.query(Zone).filter(Zone.id == zone_id).first()
-    if not zone:
-        raise HTTPException(status_code=404, detail="Zona no encontrada")
+    zone = tenant_get(db, Zone, zone_id, current_user, "Zona no encontrada")
     db.delete(zone)
     db.commit()
     return {"detail": "Zona eliminada correctamente"}

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Numeric, Index
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Numeric, Index, CheckConstraint
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -458,7 +458,16 @@ class Stock(Base):
     serial = relationship("SerialNumber", back_populates="stock")
     uom = relationship("Uom", back_populates="stock")
 
+    @property
+    def available_quantity(self) -> float:
+        qty = float(self.quantity or 0)
+        reserved = float(self.reserved_quantity or 0)
+        return qty - reserved
+
     __table_args__ = (
+        CheckConstraint("quantity >= 0", name="ck_stock_quantity_nonneg"),
+        CheckConstraint("reserved_quantity >= 0", name="ck_stock_reserved_quantity_nonneg"),
+        CheckConstraint("reserved_quantity <= quantity", name="ck_stock_reserved_lte_quantity"),
         Index("uq_stock_article_bin_lot_serial", "warehouse_id", "bin_id", "article_id", "lot_id", "serial_id", unique=True),
         Index("ix_stock_article", "company_id", "article_id"),
         Index("ix_stock_bin", "bin_id"),

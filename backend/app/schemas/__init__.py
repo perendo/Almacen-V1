@@ -60,6 +60,12 @@ class ChangePassword(BaseModel):
     new_password: str = Field(min_length=6)
 
 
+class RefreshTokenIn(BaseModel):
+    """Refresh token enviado en el cuerpo (clientes que no usan query string)."""
+
+    refresh_token: str
+
+
 # ============================================
 # COMPANIES
 # ============================================
@@ -103,7 +109,7 @@ class CenterBase(BaseModel):
 
 
 class CenterCreate(CenterBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class CenterUpdate(CenterBase):
@@ -338,7 +344,7 @@ class ArticleFamilyBase(BaseModel):
 
 
 class ArticleFamilyCreate(ArticleFamilyBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class ArticleFamilyUpdate(ArticleFamilyBase):
@@ -385,7 +391,7 @@ class ArticleBrandBase(BaseModel):
 
 
 class ArticleBrandCreate(ArticleBrandBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class ArticleBrandUpdate(ArticleBrandBase):
@@ -422,7 +428,7 @@ class ArticleBase(BaseModel):
 
 
 class ArticleCreate(ArticleBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class ArticleUpdate(ArticleBase):
@@ -476,7 +482,7 @@ class UomBase(BaseModel):
 
 
 class UomCreate(UomBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class UomUpdate(UomBase):
@@ -501,7 +507,7 @@ class UomConversionBase(BaseModel):
 
 
 class UomConversionCreate(UomConversionBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class UomConversionUpdate(UomConversionBase):
@@ -583,7 +589,7 @@ class LotBase(BaseModel):
 
 
 class LotCreate(LotBase):
-    company_id: int
+    company_id: Optional[int] = None
     article_id: int
 
 
@@ -612,7 +618,7 @@ class SerialBase(BaseModel):
 
 
 class SerialCreate(SerialBase):
-    company_id: int
+    company_id: Optional[int] = None
     article_id: int
 
 
@@ -647,7 +653,7 @@ class StockBase(BaseModel):
 
 
 class StockCreate(StockBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class StockUpdate(BaseModel):
@@ -687,8 +693,8 @@ class StockMovementBase(BaseModel):
 
 
 class StockMovementCreate(StockMovementBase):
-    company_id: int
-    user_id: int
+    company_id: Optional[int] = None
+    user_id: Optional[int] = None
 
 
 class StockMovementOut(StockMovementBase):
@@ -765,7 +771,7 @@ class InventoryCountBase(BaseModel):
 
 
 class InventoryCountCreate(InventoryCountBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class InventoryCountUpdate(BaseModel):
@@ -843,8 +849,8 @@ class AdjustmentBase(BaseModel):
 
 
 class AdjustmentCreate(AdjustmentBase):
-    company_id: int
-    user_id: int
+    company_id: Optional[int] = None
+    user_id: Optional[int] = None
 
 
 class AdjustmentUpdate(BaseModel):
@@ -881,7 +887,7 @@ class AlertBase(BaseModel):
 
 
 class AlertCreate(AlertBase):
-    company_id: int
+    company_id: Optional[int] = None
 
 
 class AlertUpdate(BaseModel):

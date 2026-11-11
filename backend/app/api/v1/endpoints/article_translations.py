@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
+from app.api.deps import get_db, require_role
+from app.core.tenancy import tenant_get
 from app.models.base import Article, ArticleTranslation
 from app.schemas import (
     ArticleTranslationBase,
@@ -20,6 +21,7 @@ def read_article_translations(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
+    tenant_get(db, Article, article_id, current_user, "Artículo no encontrado")
     return db.query(ArticleTranslation).filter(ArticleTranslation.article_id == article_id).all()
 
 
@@ -30,10 +32,10 @@ def create_article_translation(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    article = db.query(Article).filter(Article.id == article_id).first()
-    if not article:
-        raise HTTPException(status_code=404, detail="Artículo no encontrado")
-    translation = ArticleTranslation(**translation_in.model_dump())
+    tenant_get(db, Article, article_id, current_user, "Artículo no encontrado")
+    data = translation_in.model_dump()
+    data["article_id"] = article_id
+    translation = ArticleTranslation(**data)
     db.add(translation)
     db.commit()
     db.refresh(translation)

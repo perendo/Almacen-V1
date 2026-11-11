@@ -48,9 +48,6 @@ htmlcov/
 .tox/
 .mypy_cache/
 
-# --- Alembic ---
-alembic/versions/
-
 # --- Node.js / Frontend ---
 node_modules/
 npm-debug.log*
@@ -76,8 +73,9 @@ Thumbs.db
 *.log
 logs/
 
-# --- Pruebas y reportes generados ---
-TEST_REPORT.md
+# --- Cobertura y reportes temporales ---
+coverage.xml
+report.html
 
 # --- Otros ---
 *.bak

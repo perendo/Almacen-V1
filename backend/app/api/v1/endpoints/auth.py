@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta
-from typing import Any
+from typing import Any, Optional
 import uuid
 from app.api.deps import get_db, get_current_active_user, require_role, get_client_ip
 
+from app.core.audit import log_audit_event
 from app.core.config import settings
+from app.core.ratelimit import limiter
 from app.core.security import (
     verify_password,
     get_password_hash,
@@ -22,6 +24,7 @@ from app.schemas import (
     UserUpdate,
     UserOut,
     ChangePassword,
+    RefreshTokenIn,
     TokenData,
 )
 
@@ -41,6 +44,11 @@ def _build_token_data(user: User, db: Session) -> dict:
 
 def _revoke_token_jti(db: Session, jti: str, user_id: int, expires_at, company_id=None) -> None:
     """Marca un jti como revocado en la tabla de revoked_tokens."""
+    from datetime import datetime, timezone
+
+    if isinstance(expires_at, (int, float)):
+        expires_at = datetime.fromtimestamp(expires_at, tz=timezone.utc)
+
     existing = db.query(RevokedToken).filter(RevokedToken.jti == jti).first()
     if not existing:
         db.add(
@@ -61,6 +69,13 @@ async def login(
 ) -> Any:
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.password_hash):
+        if request is not None:
+            limiter.hit(
+                request,
+                "login_failed",
+                settings.LOGIN_RATE_LIMIT,
+                settings.LOGIN_RATE_WINDOW_SECONDS,
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciales incorrectas",
@@ -72,6 +87,16 @@ async def login(
     token_data = _build_token_data(user, db)
     access_token = create_access_token(data=token_data)
     refresh_token = create_refresh_token(data=token_data)
+    log_audit_event(
+        db,
+        action="login",
+        entity_type="User",
+        entity_id=user.id,
+        current_user=user,
+        request=request,
+        description="Inicio de sesión correcto",
+    )
+    db.commit()
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -87,6 +112,13 @@ async def login_json(
 ) -> Any:
     user = db.query(User).filter(User.email == user_in.email).first()
     if not user or not verify_password(user_in.password, user.password_hash):
+        if request is not None:
+            limiter.hit(
+                request,
+                "login_failed",
+                settings.LOGIN_RATE_LIMIT,
+                settings.LOGIN_RATE_WINDOW_SECONDS,
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Credenciales incorrectas",
@@ -98,6 +130,16 @@ async def login_json(
     token_data = _build_token_data(user, db)
     access_token = create_access_token(data=token_data)
     refresh_token = create_refresh_token(data=token_data)
+    log_audit_event(
+        db,
+        action="login",
+        entity_type="User",
+        entity_id=user.id,
+        current_user=user,
+        request=request,
+        description="Inicio de sesión correcto (JSON)",
+    )
+    db.commit()
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -107,10 +149,25 @@ async def login_json(
 
 @router.post("/refresh", response_model=Token, tags=["auth"])
 async def refresh_token(
-    refresh_token: str,
+    refresh_token: Optional[str] = None,
+    body: Optional[RefreshTokenIn] = Body(default=None),
     db: Session = Depends(get_db),
+    request: Request = None,
 ) -> Any:
-    payload = decode_token(refresh_token)
+    if request is not None:
+        limiter.hit(
+            request,
+            "refresh",
+            settings.REFRESH_RATE_LIMIT,
+            settings.REFRESH_RATE_WINDOW_SECONDS,
+        )
+
+    # Compatibilidad: query string (docs/tests) o cuerpo JSON (frontend Next.js).
+    token_value = refresh_token or (body.refresh_token if body is not None else None)
+    if not token_value:
+        raise HTTPException(status_code=401, detail="Token de refresco no proporcionado")
+
+    payload = decode_token(token_value)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -158,6 +215,8 @@ async def refresh_token(
 @router.post("/logout", tags=["auth"])
 async def logout(
     request: Request,
+    refresh_token: Optional[str] = None,
+    body: Optional[RefreshTokenIn] = Body(default=None),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ) -> Any:
@@ -174,6 +233,31 @@ async def logout(
                 expires_at=payload.get("exp"),
                 company_id=current_user.company_id,
             )
+
+    # Revocar también el refresh token si el cliente lo envía (rotación completa)
+    token_value = refresh_token or (body.refresh_token if body is not None else None)
+    if token_value:
+        refresh_payload = decode_token(token_value)
+        if refresh_payload is None or refresh_payload.get("user_id") != current_user.id:
+            raise HTTPException(status_code=400, detail="Refresh token inválido")
+        if refresh_payload.get("jti"):
+            _revoke_token_jti(
+                db,
+                jti=refresh_payload.get("jti"),
+                user_id=current_user.id,
+                expires_at=refresh_payload.get("exp"),
+                company_id=current_user.company_id,
+            )
+
+    log_audit_event(
+        db,
+        action="logout",
+        entity_type="User",
+        entity_id=current_user.id,
+        current_user=current_user,
+        request=request,
+        description="Cierre de sesión",
+    )
     db.commit()
     return {"detail": "Sesión cerrada correctamente"}
 
@@ -199,6 +283,7 @@ async def read_user_me(
 @router.post("/change-password", tags=["auth"])
 async def change_password(
     password_in: ChangePassword,
+    request: Request,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ) -> Any:
@@ -209,6 +294,15 @@ async def change_password(
         )
     current_user.password_hash = get_password_hash(password_in.new_password)
     db.add(current_user)
+    log_audit_event(
+        db,
+        action="change_password",
+        entity_type="User",
+        entity_id=current_user.id,
+        current_user=current_user,
+        request=request,
+        description="Cambio de contraseña",
+    )
     db.commit()
     return {"detail": "Contraseña actualizada correctamente"}
 
@@ -216,6 +310,7 @@ async def change_password(
 @router.post("/", response_model=UserOut, status_code=status.HTTP_201_CREATED, tags=["auth"])
 async def create_user(
     user_in: UserCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["SuperAdmin"])),
 ) -> Any:
@@ -244,7 +339,24 @@ async def create_user(
             user_role = UserRole(user_id=user.id, role_id=role_id, company_id=user.company_id)
             db.add(user_role)
 
+    log_audit_event(
+        db,
+        action="create",
+        entity_type="User",
+        entity_id=user.id,
+        current_user=current_user,
+        request=request,
+        description=f"Alta de usuario {user.email}",
+        new_values={"email": user.email, "company_id": user.company_id, "role_ids": user_in.role_ids},
+    )
     db.commit()
     db.refresh(user)
     roles = [ur.role.name for ur in user.user_roles] if user.user_roles else []
-    return UserOut.model_validate(user, update={"roles": roles})
+    return UserOut(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        is_active=user.is_active,
+        company_id=user.company_id,
+        roles=roles,
+    )

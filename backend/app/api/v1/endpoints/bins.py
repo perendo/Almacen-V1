@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import Bin, Shelf
+from app.api.deps import get_db, require_role
+from app.core.tenancy import ensure_parent_in_tenant, scope_query, tenant_get
+from app.models.base import Bin, Shelf, Zone
 from app.schemas import BinBase, BinCreate, BinUpdate, BinOut
 
 router = APIRouter()
@@ -19,9 +20,11 @@ def read_bins(
     is_active: Optional[bool] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Bin)
+    query = scope_query(db.query(Bin), Bin, current_user)
     if shelf_id:
         query = query.filter(Bin.shelf_id == shelf_id)
+    if warehouse_id:
+        query = query.filter(Zone.warehouse_id == warehouse_id)
     if is_active is not None:
         query = query.filter(Bin.is_active == is_active)
     return query.offset(skip).limit(limit).all()
@@ -33,9 +36,7 @@ def create_bin(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    shelf = db.query(Shelf).filter(Shelf.id == bin_in.shelf_id).first()
-    if not shelf:
-        raise HTTPException(status_code=404, detail="Estantería no encontrada")
+    ensure_parent_in_tenant(db, Shelf, bin_in.shelf_id, current_user, "Estantería no encontrada")
     bin = Bin(**bin_in.model_dump())
     db.add(bin)
     db.commit()
@@ -49,10 +50,7 @@ def read_bin(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    bin = db.query(Bin).filter(Bin.id == bin_id).first()
-    if not bin:
-        raise HTTPException(status_code=404, detail="Bin no encontrado")
-    return bin
+    return tenant_get(db, Bin, bin_id, current_user, "Bin no encontrado")
 
 
 @router.put("/{bin_id}", response_model=BinOut, tags=["bins"])
@@ -62,10 +60,11 @@ def update_bin(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    bin = db.query(Bin).filter(Bin.id == bin_id).first()
-    if not bin:
-        raise HTTPException(status_code=404, detail="Bin no encontrado")
-    for field, value in bin_in.model_dump(exclude_unset=True).items():
+    bin = tenant_get(db, Bin, bin_id, current_user, "Bin no encontrado")
+    data = bin_in.model_dump(exclude_unset=True)
+    if "shelf_id" in data and data["shelf_id"] != bin.shelf_id:
+        ensure_parent_in_tenant(db, Shelf, data["shelf_id"], current_user, "Estantería no encontrada")
+    for field, value in data.items():
         setattr(bin, field, value)
     db.add(bin)
     db.commit()
@@ -79,9 +78,7 @@ def delete_bin(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    bin = db.query(Bin).filter(Bin.id == bin_id).first()
-    if not bin:
-        raise HTTPException(status_code=404, detail="Bin no encontrado")
+    bin = tenant_get(db, Bin, bin_id, current_user, "Bin no encontrado")
     db.delete(bin)
     db.commit()
     return {"detail": "Bin eliminado correctamente"}

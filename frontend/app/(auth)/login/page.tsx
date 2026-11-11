@@ -3,11 +3,12 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { api } from "@/lib/api"
-import { setToken } from "@/lib/auth"
+import { setRefreshToken, setToken } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import Footer from "@/components/layout/footer"
 
 export default function LoginPage() {
   const [email, setEmail] = useState("")
@@ -21,21 +22,23 @@ export default function LoginPage() {
     setLoading(true)
     setError("")
     try {
-      const data = await api.post<{ access_token: string }>("/auth/login/json", {
+      const data = await api.post<{ access_token: string; refresh_token: string }>("/auth/login/json", {
         email,
         password,
       })
       setToken(data.access_token)
+      setRefreshToken(data.refresh_token)
       router.push("/dashboard")
-    } catch (err: any) {
-      setError(err.message || "Credenciales incorrectas")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Credenciales incorrectas")
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="flex min-h-screen flex-col bg-background">
+      <div className="flex flex-1 items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <CardTitle className="text-xl">Iniciar sesión</CardTitle>
@@ -73,6 +76,8 @@ export default function LoginPage() {
           Usuarios de prueba: superadmin@demo.com, gerente@demo.com, operario@demo.com, auditor@demo.com
         </CardFooter>
       </Card>
+      </div>
+      <Footer />
     </div>
   )
 }

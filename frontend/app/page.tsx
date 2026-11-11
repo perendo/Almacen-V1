@@ -1,9 +1,10 @@
 import Link from "next/link"
+import Footer from "@/components/layout/footer"
 
 export default function Page() {
   return (
-    <div className="min-h-screen bg-background p-8">
-      <div className="max-w-4xl mx-auto">
+    <div className="flex min-h-screen flex-col bg-background">
+      <main className="mx-auto w-full max-w-4xl flex-1 p-8">
         <div className="card p-6 mb-6">
           <h1 className="text-2xl font-semibold mb-2">WMS - Gestión de Almacén e Inventario</h1>
           <p className="text-muted-foreground">
@@ -25,7 +26,9 @@ export default function Page() {
             <p className="text-sm text-muted-foreground">Gestión de inventario por ubicación</p>
           </Link>
         </div>
-      </div>
+      </main>
+
+      <Footer />
     </div>
   )
 }

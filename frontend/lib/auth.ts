@@ -39,11 +39,32 @@ export function decodeJWT(token: string): any {
   }
 }
 
+export const USER_ROLES_CACHE_KEY = "wms_user_roles"
+
+/**
+ * Roles efectivos del usuario. Prefiere la copia cacheada del perfil
+ * `GET /auth/me` (que es la fuente de verdad) y solo cae al JWT cuando
+ * todavía no se ha cargado el perfil.
+ */
 export function getUserRoles(): string[] {
+  if (typeof window !== "undefined") {
+    try {
+      const cached = localStorage.getItem(USER_ROLES_CACHE_KEY)
+      if (cached) {
+        const parsed: unknown = JSON.parse(cached)
+        if (Array.isArray(parsed)) {
+          return parsed.filter((role): role is string => typeof role === "string")
+        }
+      }
+    } catch {
+      // caché corrupta: se ignora y se usa el JWT
+    }
+  }
+
   const token = getToken()
   if (!token) return []
   const payload = decodeJWT(token)
-  return payload?.roles ?? []
+  return Array.isArray(payload?.roles) ? payload.roles : []
 }
 
 export function hasRole(role: string): boolean {

@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import Lot, Article
+from app.api.deps import get_db, require_role
+from app.core.tenancy import is_superadmin, scope_query, tenant_get
+from app.models.base import Article, Lot
 from app.schemas import (
     LotBase,
     LotCreate,
@@ -12,6 +13,12 @@ from app.schemas import (
 )
 
 router = APIRouter()
+
+
+def _resolve_company(current_user: Any, company_id: Optional[int]) -> int:
+    if is_superadmin(current_user) and company_id is not None:
+        return company_id
+    return current_user.company_id
 
 
 # ============================================
@@ -28,9 +35,7 @@ def read_lots(
     status: Optional[str] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Lot)
-    if company_id:
-        query = query.filter(Lot.company_id == company_id)
+    query = scope_query(db.query(Lot), Lot, current_user, company_id)
     if article_id:
         query = query.filter(Lot.article_id == article_id)
     if status:
@@ -44,7 +49,10 @@ def create_lot(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén"])),
 ) -> Any:
-    lot = Lot(**lot_in.model_dump())
+    tenant_get(db, Article, lot_in.article_id, current_user, "Artículo no encontrado")
+    data = lot_in.model_dump()
+    data["company_id"] = _resolve_company(current_user, data.get("company_id"))
+    lot = Lot(**data)
     db.add(lot)
     db.commit()
     db.refresh(lot)
@@ -57,10 +65,7 @@ def read_lot(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    lot = db.query(Lot).filter(Lot.id == lot_id).first()
-    if not lot:
-        raise HTTPException(status_code=404, detail="Lote no encontrado")
-    return lot
+    return tenant_get(db, Lot, lot_id, current_user, "Lote no encontrado")
 
 
 @router.put("/{lot_id}", response_model=LotOut, tags=["lots"])
@@ -70,13 +75,13 @@ def update_lot(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén"])),
 ) -> Any:
-    lot = db.query(Lot).filter(Lot.id == lot_id).first()
-    if not lot:
-        raise HTTPException(status_code=404, detail="Lote no encontrado")
-    for field, value in lot_in.model_dump(exclude_unset=True).items():
+    lot = tenant_get(db, Lot, lot_id, current_user, "Lote no encontrado")
+    data = lot_in.model_dump(exclude_unset=True)
+    if "company_id" in data and not is_superadmin(current_user):
+        data.pop("company_id")
+    for field, value in data.items():
         setattr(lot, field, value)
     db.add(lot)
     db.commit()
     db.refresh(lot)
     return lot
-

@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import Uom, UomConversion, ArticlePrice, ArticleTax, Article
+from app.api.deps import get_db, require_role
+from app.core.tenancy import is_superadmin, scope_query, tenant_get
+from app.models.base import Article, ArticlePrice, ArticleTax, Uom, UomConversion
 from app.schemas import (
     UomBase,
     UomCreate,
@@ -23,6 +24,12 @@ from app.schemas import (
 router = APIRouter()
 
 
+def _resolve_company(current_user: Any, company_id: Optional[int]) -> int:
+    if is_superadmin(current_user) and company_id is not None:
+        return company_id
+    return current_user.company_id
+
+
 # ============================================
 # UOMS
 # ============================================
@@ -36,9 +43,7 @@ def read_uoms(
     type: Optional[str] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Uom)
-    if company_id:
-        query = query.filter(Uom.company_id == company_id)
+    query = scope_query(db.query(Uom), Uom, current_user, company_id)
     if type:
         query = query.filter(Uom.type == type)
     return query.offset(skip).limit(limit).all()
@@ -50,7 +55,9 @@ def create_uom(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    uom = Uom(**uom_in.model_dump())
+    data = uom_in.model_dump()
+    data["company_id"] = _resolve_company(current_user, data.get("company_id"))
+    uom = Uom(**data)
     db.add(uom)
     db.commit()
     db.refresh(uom)
@@ -67,10 +74,7 @@ def read_uom_conversions(
     company_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(UomConversion)
-    if company_id:
-        query = query.filter(UomConversion.company_id == company_id)
-    return query.all()
+    return scope_query(db.query(UomConversion), UomConversion, current_user, company_id).all()
 
 
 @router.post("/conversions", response_model=UomConversionOut, status_code=status.HTTP_201_CREATED, tags=["uom-conversions"])
@@ -79,7 +83,9 @@ def create_uom_conversion(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    conv = UomConversion(**conv_in.model_dump())
+    data = conv_in.model_dump()
+    data["company_id"] = _resolve_company(current_user, data.get("company_id"))
+    conv = UomConversion(**data)
     db.add(conv)
     db.commit()
     db.refresh(conv)
@@ -96,7 +102,7 @@ def read_article_prices(
     article_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(ArticlePrice)
+    query = scope_query(db.query(ArticlePrice), ArticlePrice, current_user)
     if article_id:
         query = query.filter(ArticlePrice.article_id == article_id)
     return query.all()
@@ -108,6 +114,7 @@ def create_article_price(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
+    tenant_get(db, Article, price_in.article_id, current_user, "Artículo no encontrado")
     price = ArticlePrice(**price_in.model_dump())
     db.add(price)
     db.commit()
@@ -125,7 +132,7 @@ def read_article_taxes(
     article_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(ArticleTax)
+    query = scope_query(db.query(ArticleTax), ArticleTax, current_user)
     if article_id:
         query = query.filter(ArticleTax.article_id == article_id)
     return query.all()
@@ -137,6 +144,7 @@ def create_article_tax(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
+    tenant_get(db, Article, tax_in.article_id, current_user, "Artículo no encontrado")
     tax = ArticleTax(**tax_in.model_dump())
     db.add(tax)
     db.commit()

@@ -47,11 +47,37 @@ export interface StockExitCreate {
 
 export interface StockMovementOut {
   id: number
+  company_id: number
   movement_type: StockMovementType
+  reference_type: string | null
+  reference_id: number | null
   article_id: number
+  from_warehouse_id: number | null
+  from_bin_id: number | null
+  to_warehouse_id: number | null
+  to_bin_id: number | null
+  lot_id: number | null
+  serial_id: number | null
   quantity: number
   uom_id: number
+  notes: string | null
   user_id: number
   timestamp: string
-  notes: string | null
+}
+
+export interface StockOperationResult {
+  detail: string
+}
+
+export interface InternalTransferCreate {
+  from_warehouse_id: number
+  from_bin_id?: number | null
+  to_warehouse_id: number
+  to_bin_id?: number | null
+  article_id: number
+  lot_id?: number | null
+  serial_id?: number | null
+  quantity: number
+  uom_id: number
+  notes?: string
 }

@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
+from app.api.deps import get_db, require_role
+from app.core.tenancy import is_superadmin, scope_query
 from app.models.base import ArticleBrand
 from app.schemas import (
     ArticleBrandBase,
@@ -14,6 +15,12 @@ from app.schemas import (
 router = APIRouter()
 
 
+def _resolve_company(current_user: Any, company_id: Optional[int]) -> int:
+    if is_superadmin(current_user) and company_id is not None:
+        return company_id
+    return current_user.company_id
+
+
 @router.get("/", response_model=List[ArticleBrandOut], tags=["article-brands"])
 def read_article_brands(
     db: Session = Depends(get_db),
@@ -22,9 +29,7 @@ def read_article_brands(
     company_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(ArticleBrand)
-    if company_id:
-        query = query.filter(ArticleBrand.company_id == company_id)
+    query = scope_query(db.query(ArticleBrand), ArticleBrand, current_user, company_id)
     return query.offset(skip).limit(limit).all()
 
 
@@ -34,7 +39,9 @@ def create_article_brand(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    brand = ArticleBrand(**brand_in.model_dump())
+    data = brand_in.model_dump()
+    data["company_id"] = _resolve_company(current_user, data.get("company_id"))
+    brand = ArticleBrand(**data)
     db.add(brand)
     db.commit()
     db.refresh(brand)

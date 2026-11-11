@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
+from app.api.deps import get_db, require_role
+from app.core.tenancy import is_superadmin, scope_query, tenant_get
 from app.models.base import Center, Company
 from app.schemas import CenterBase, CenterCreate, CenterUpdate, CenterOut
 
@@ -18,12 +19,7 @@ def read_centers(
     is_active: Optional[bool] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    query = db.query(Center)
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" in user_roles and company_id is not None:
-        query = query.filter(Center.company_id == company_id)
-    else:
-        query = query.filter(Center.company_id == current_user.company_id)
+    query = scope_query(db.query(Center), Center, current_user, company_id)
     if is_active is not None:
         query = query.filter(Center.is_active == is_active)
     return query.offset(skip).limit(limit).all()
@@ -35,15 +31,17 @@ def create_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    company = db.query(Company).filter(Company.id == center_in.company_id).first()
+    target_company_id = center_in.company_id or current_user.company_id
+    if not is_superadmin(current_user) and target_company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="No autorizado para esta empresa")
+
+    company = db.query(Company).filter(Company.id == target_company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
 
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles and center_in.company_id != current_user.company_id:
-        raise HTTPException(status_code=403, detail="No autorizado para esta empresa")
-
-    center = Center(**center_in.model_dump())
+    data = center_in.model_dump()
+    data["company_id"] = target_company_id
+    center = Center(**data)
     db.add(center)
     db.commit()
     db.refresh(center)
@@ -56,14 +54,7 @@ def read_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    query = db.query(Center).filter(Center.id == center_id)
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles:
-        query = query.filter(Center.company_id == current_user.company_id)
-    center = query.first()
-    if not center:
-        raise HTTPException(status_code=404, detail="Centro no encontrado")
-    return center
+    return tenant_get(db, Center, center_id, current_user, "Centro no encontrado")
 
 
 @router.put("/{center_id}", response_model=CenterOut, tags=["centers"])
@@ -73,14 +64,12 @@ def update_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    query = db.query(Center).filter(Center.id == center_id)
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles:
-        query = query.filter(Center.company_id == current_user.company_id)
-    center = query.first()
-    if not center:
-        raise HTTPException(status_code=404, detail="Centro no encontrado")
-    for field, value in center_in.model_dump(exclude_unset=True).items():
+    center = tenant_get(db, Center, center_id, current_user, "Centro no encontrado")
+    data = center_in.model_dump(exclude_unset=True)
+    if "company_id" in data and not is_superadmin(current_user):
+        if data["company_id"] != current_user.company_id:
+            raise HTTPException(status_code=403, detail="No puede mover el centro a otra empresa")
+    for field, value in data.items():
         setattr(center, field, value)
     db.add(center)
     db.commit()
@@ -94,13 +83,7 @@ def delete_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    query = db.query(Center).filter(Center.id == center_id)
-    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
-    if "SuperAdmin" not in user_roles:
-        query = query.filter(Center.company_id == current_user.company_id)
-    center = query.first()
-    if not center:
-        raise HTTPException(status_code=404, detail="Centro no encontrado")
+    center = tenant_get(db, Center, center_id, current_user, "Centro no encontrado")
     db.delete(center)
     db.commit()
     return {"detail": "Centro eliminado correctamente"}

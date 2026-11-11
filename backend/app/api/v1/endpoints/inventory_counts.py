@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
 
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import InventoryCount
+from app.api.deps import get_db, require_role
+from app.core.audit import log_audit_event
+from app.core.tenancy import is_superadmin, scope_query, tenant_get
+from app.models.base import InventoryCount, Warehouse
 from app.schemas import (
     InventoryCountBase,
     InventoryCountCreate,
@@ -12,6 +14,12 @@ from app.schemas import (
 )
 
 router = APIRouter()
+
+
+def _resolve_company(current_user: Any, company_id: Optional[int]) -> int:
+    if is_superadmin(current_user) and company_id is not None:
+        return company_id
+    return current_user.company_id
 
 
 @router.get("/", response_model=List[InventoryCountOut], tags=["inventory-counts"])
@@ -25,9 +33,7 @@ def read_inventory_counts(
     status: Optional[str] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(InventoryCount)
-    if company_id:
-        query = query.filter(InventoryCount.company_id == company_id)
+    query = scope_query(db.query(InventoryCount), InventoryCount, current_user, company_id)
     if warehouse_id:
         query = query.filter(InventoryCount.warehouse_id == warehouse_id)
     if count_type:
@@ -40,11 +46,26 @@ def read_inventory_counts(
 @router.post("/", response_model=InventoryCountOut, status_code=status.HTTP_201_CREATED, tags=["inventory-counts"])
 def create_inventory_count(
     count_in: InventoryCountCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    count = InventoryCount(**count_in.model_dump(), status="planned")
+    tenant_get(db, Warehouse, count_in.warehouse_id, current_user, "Almacén no encontrado")
+
+    data = count_in.model_dump()
+    data["company_id"] = _resolve_company(current_user, data.get("company_id"))
+    count = InventoryCount(**data, status="planned")
     db.add(count)
+    log_audit_event(
+        db,
+        action="create",
+        entity_type="InventoryCount",
+        entity_id=None,
+        current_user=current_user,
+        request=request,
+        description="Alta de inventario físico",
+        new_values={"warehouse_id": count.warehouse_id, "count_type": getattr(count, "count_type", None)},
+    )
     db.commit()
     db.refresh(count)
     return count
@@ -56,7 +77,4 @@ def read_inventory_count(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    count = db.query(InventoryCount).filter(InventoryCount.id == count_id).first()
-    if not count:
-        raise HTTPException(status_code=404, detail="Conteo no encontrado")
-    return count
+    return tenant_get(db, InventoryCount, count_id, current_user, "Conteo no encontrado")
