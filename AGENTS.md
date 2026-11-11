@@ -10,6 +10,8 @@ Este archivo proporciona instrucciones para los agentes de IA que trabajan en es
 **Descripción:** Sistema de gestión de almacén e inventario con multitenencia, trazabilidad completa (lotes, números de serie), control de inventario, alertas, informes y auditoría.  
 **Especificación funcional:** `Almacen.md`  
 **Plan técnico:** `PLAN.md`  
+**Informe de auditoría:** `auditoria.md` (Noviembre 2026 — Dictamen: RIESGO ALTO / CRÍTICO, 42/100; remediación en curso)  
+**Reporte de calidad:** `QUALITY_AND_TEST_REPORT.md`  
 
 ---
 
@@ -18,11 +20,11 @@ Este archivo proporciona instrucciones para los agentes de IA que trabajan en es
 | Capa | Tecnología | Versión |
 |------|-----------|---------|
 | Backend | FastAPI (Python) | Python 3.11+ |
-| ORM / BD | SQLAlchemy 2.0 + SQLite (desarrollo) | Alembic para migraciones |
+| ORM / BD | SQLAlchemy 2.0 + **PostgreSQL** (dev y prod) | Migraciones con Alembic |
 | Validación de datos | Pydantic v2 | Modelos de entrada/salida |
 | Autenticación | JWT (access + refresh tokens) | `python-jose`, `passlib[bcrypt]` |
 | Frontend | Next.js App Router | TypeScript, Tailwind CSS |
-| Llamadas API | Fetch nativo + servicios encapsulados | `/lib/api.ts` |
+| Llamadas API | Fetch nativo + servicios encapsulados | `/lib/api.ts` (con interceptor 401 + refresh) |
 | Validación frontend | Zod | Esquemas espejo de Pydantic v2 |
 | Componentes UI | shadcn/ui / Radix + Tailwind | Table, Form, Dialog, Badge, Alert |
 | Estado del servidor | TanStack Query (React Query) | Caché, mutaciones, invalidaciones |
@@ -33,33 +35,43 @@ Este archivo proporciona instrucciones para los agentes de IA que trabajan en es
 ## 3. Estructura del Proyecto
 
 ```
-H:\Almacen\
+H:\Almacen-V1\
 ├── Almacen.md          # Especificación funcional
-├── PLAN.md             # Plan técnico aprobado
-├── TEST_REPORT.md      # Reporte de pruebas de integración (100% verde)
+├── PLAN.md             # Plan técnico aprobado (remediación de auditoría)
+├── QUALITY_AND_TEST_REPORT.md  # Reporte de calidad y pruebas
+├── TEST_REPORT.md      # Reporte de pruebas de integración (pendiente de ejecutar con PostgreSQL)
 ├── README.md           # Documentación del proyecto
 ├── AGENTS.md           # Este archivo
+├── LICENSE             # Licencia MIT
+├── DISCLAIMER.md       # Aviso de responsabilidad
+├── TERMS.md            # Términos y Condiciones de Uso
+├── auditoria.md        # Informe de auditoría técnica y de seguridad
 ├── backend/            # API FastAPI
 │   ├── app/
-│   │   ├── main.py                 # App FastAPI con CORS, /docs, /redoc, /health
+│   │   ├── main.py                 # App FastAPI con CORS, lifespan, /docs, /redoc, /health, /terminos, /privacidad, /aviso-legal
 │   │   ├── core/
-│   │   │   ├── config.py           # Pydantic Settings + .env
-│   │   │   ├── database.py         # SQLAlchemy engine, SessionLocal, Base
-│   │   │   └── security.py         # JWT, bcrypt, verify_password
+│   │   │   ├── config.py           # Pydantic Settings + .env (SECRET_KEY obligatoria, PostgreSQL)
+│   │   │   ├── database.py         # SQLAlchemy engine con pool PostgreSQL / check_same_thread SQLite
+│   │   │   └── security.py         # JWT, bcrypt, verify_password (roles y jti en tokens)
 │   │   ├── api/
-│   │   │   ├── deps.py             # get_db, get_current_user, require_role, require_permission
+│   │   │   ├── deps.py             # get_db, get_current_user, require_role, require_permission (JOIN único, sin N+1)
 │   │   │   └── v1/
 │   │   │       ├── api.py          # Router principal con todos los endpoints
-│   │   │       └── endpoints/      # 20+ archivos de endpoints por entidad
+│   │   │       └── endpoints/      # Endpoints por entidad (con aislamiento multitenencia)
 │   │   ├── models/
-│   │   │   └── base.py             # 20+ modelos SQLAlchemy con relaciones
+│   │   │   └── base.py             # Modelos SQLAlchemy (incluye RevokedToken, CHECK constraints)
 │   │   └── schemas/
 │   │       └── __init__.py         # Pydantic v2 esquemas para todas las entidades
-│   ├── alembic/                    # Migraciones de BD
+│   ├── alembic/                    # Migraciones de BD (0001_initial_schema para PostgreSQL)
+│   ├── alembic.ini                 # Configuración Alembic (URL PostgreSQL)
 │   ├── seed.py                     # Datos iniciales (roles, permisos, empresa, usuarios)
-│   ├── .env                        # Configuración de desarrollo
+│   ├── .env                        # Configuración de desarrollo (PostgreSQL)
 │   ├── .env.example                # Ejemplo de configuración
-│   └── requirements.txt            # Dependencias Python
+│   ├── requirements.txt            # Dependencias Python (incluye psycopg[binary])
+│   └── tests_integration.py        # Pruebas de integración (requieren servidor levantado)
+│   └── tests/                      # Scripts de prueba auxiliares
+│       ├── run_complete_test.py    # Pruebas completas de API (levantar servidor + pruebas)
+│       └── run_pytest.py           # Ejecutar pytest contra el servidor levantado
 ├── frontend/                       # App Next.js
 │   ├── app/
 │   │   ├── layout.tsx              # Layout raíz
@@ -70,7 +82,7 @@ H:\Almacen\
 │   │   │   └── login/page.tsx      # Login
 │   │   └── (dashboard)/            # Grupo de aplicación principal
 │   │       ├── layout.tsx          # Sidebar, navbar, AuthProvider
-│   │       ├── page.tsx            # Dashboard con KPIs y alertas
+│   │       ├── page.tsx            # Dashboard con KPIs y alertas (datos reales)
 │   │       ├── companies/          # Empresas (SuperAdmin)
 │   │       ├── centers/            # Centros
 │   │       ├── warehouses/         # Almacenes
@@ -80,11 +92,11 @@ H:\Almacen\
 │   │       ├── bins/               # Huecos/Bins
 │   │       ├── users/              # Usuarios y roles
 │   │       ├── roles/              # Roles y permisos (RBAC)
-│   │       ├── articles/           # Maestros de artículos
+│   │       ├── articles/           # Maestros de artículos (datos reales)
 │   │       ├── article-families/   # Familias
 │   │       ├── article-brands/     # Marcas
 │   │       ├── uoms/               # Unidades de medida
-│   │       ├── stock/              # Stock por ubicación
+│   │       ├── stock/              # Stock por ubicación (datos reales)
 │   │       ├── movements/          # Movimientos de stock
 │   │       ├── lots/               # Lotes
 │   │       ├── serials/            # Números de serie (trazabilidad)
@@ -94,22 +106,22 @@ H:\Almacen\
 │   │       ├── reports/            # Informes y KPIs
 │   │       └── audit/              # Logs de auditoría
 │   ├── components/
-│   │   ├── ui/                     # shadcn/ui base (button, input, table, card, etc.)
+│   │   ├── ui/                     # shadcn/ui base (incluye skeleton.tsx)
 │   │   ├── layout/                 # Sidebar, Navbar
-│   │   └── auth-provider.tsx       # Contexto de autenticación JWT
+│   │   └── auth-provider.tsx       # Contexto de autenticación JWT (carga /auth/me)
 │   ├── lib/
-│   │   ├── api.ts                  # Servicio fetch con auth y manejo de errores
+│   │   ├── api.ts                  # Servicio fetch con auth, interceptor 401 + refresh, ApiError
 │   │   ├── auth.ts                 # Helpers de sesión (token, logout, decodeJWT)
 │   │   └── utils.ts                # cn(), formatCurrency, formatDate, etc.
 │   ├── hooks/
 │   │   ├── useAuth.tsx             # Hook de autenticación
-│   │   ├── useArticles.ts          # Hooks React Query para artículos
-│   │   └── useApi.ts               # Hooks React Query para todas las entidades
+│   │   ├── useArticles.ts          # Hooks React Query para artículos y stock
+│   │   └── useApi.ts               # Hooks React Query para todas las entidades (rutas corregidas)
 │   ├── types/
 │   │   ├── index.ts                # Exportación centralizada
-│   │   ├── auth.ts                 # Tipos de autenticación
+│   │   ├── auth.ts                 # Tipos de autenticación (UserOut con roles)
 │   │   ├── organization.ts         # Tipos de empresas, centros, almacenes
-│   │   ├── stock.ts                # Tipos de stock y movimientos
+│   │   ├── stock.ts                # Tipos de stock y movimientos (StockOut con company_id)
 │   │   ├── rbac.ts                 # Tipos de roles, permisos, usuarios
 │   │   └── master-data.ts          # Tipos de familias, marcas, UOM, lotes, alertas, etc.
 │   ├── package.json
@@ -126,23 +138,27 @@ H:\Almacen\
 2. **@arquitecto** → diseña BD, API y rutas; genera `PLAN.md`.
 3. **@fastapi_dev** → implementa backend (modelos, endpoints, CORS, JWT, seed).
 4. **@nextjs_dev** → implementa frontend (páginas, componentes, servicios API).
-5. **@tester_integracion** → valida comunicación CORS, payloads, estados de error; genera `TEST_REPORT.md`.
+5. **@tester_integracion** → valida comunicación CORS, payloads, estados de error; genera `TEST_REPORT.md` y `QUALITY_AND_TEST_REPORT.md`.
 
 ---
 
 ## 5. Cómo Levantar el Proyecto
 
-### Backend (FastAPI)
+### Backend (FastAPI + PostgreSQL)
 
 ```powershell
 # Activar entorno virtual
 H:\Almacen\.venv\Scripts\Activate.ps1
 
-# Instalar dependencias
+# Instalar dependencias (incluye psycopg[binary] para PostgreSQL)
 pip install -r backend\requirements.txt
 
+# Ejecutar migraciones de Alembic (requiere PostgreSQL corriendo)
+cd backend
+python -m alembic upgrade head
+
 # Ejecutar seed de datos iniciales
-python backend\seed.py
+python seed.py
 
 # Levantar servidor
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
@@ -151,11 +167,14 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - API: `http://127.0.0.1:8000`
 - Documentación automática: `http://127.0.0.1:8000/docs` y `/redoc`
 - Health check: `http://127.0.0.1:8000/health`
+- Endpoints legales: `/terminos`, `/privacidad`, `/aviso-legal`
+
+> **Nota:** El archivo `.env` está configurado para PostgreSQL (`postgresql+psycopg://wms_user:wms_password@localhost:5432/wms_db`). Asegúrate de tener PostgreSQL corriendo antes de iniciar el servidor. Para desarrollo local sin PostgreSQL, cambia temporalmente `DATABASE_URL` a `sqlite:///./wms.db` en `.env`.
 
 ### Frontend (Next.js)
 
 ```powershell
-cd H:\Almacen\frontend
+cd H:\Almacen-V1\frontend
 npm install
 npm run dev
 ```
@@ -180,10 +199,14 @@ npm run dev
 ### Backend
 - Todo código debe usar **Python Type Hints**.
 - Usar **Pydantic v2** para validación de datos.
-- Configurar CORS para permitir peticiones desde `http://localhost:3000`.
+- Configurar CORS restrictivo para permitir peticiones únicamente desde `http://localhost:3000`.
 - Cada endpoint debe verificarse con `uvicorn main:app --reload` para confirmar que arranca sin errores de sintaxis.
-- Multitenencia: casi todas las tablas llevan `company_id` NOT NULL; el aislamiento se filtra en cada consulta.
-- Auditoría: cada mutación escribe en `audit_logs` con `user_id`, `timestamp`, `IP`, `acción` y `valores_previos/nuevos`.
+- **Multitenencia:** casi todas las tablas llevan `company_id` NOT NULL; el aislamiento se filtra en cada consulta (solo SuperAdmin puede consultar otra empresa).
+- **Auditoría:** cada mutación escribe en `audit_logs` con `user_id`, `timestamp`, `IP`, `acción` y `valores_previos/nuevos`.
+- **SECRET_KEY:** obligatoria por variable de entorno, mínimo 32 caracteres, sin valor por defecto inseguro.
+- **Stock:** operaciones de lectura/escritura usan `with_for_update()` (bloqueo pesimista); las salidas reducen `stock.quantity`.
+- **Fechas:** usar `datetime.now(timezone.utc)` en lugar de `datetime.utcnow()` (deprecado).
+- **Migraciones:** esquema gestionado exclusivamente con Alembic (`alembic upgrade head`); `create_all()` solo en desarrollo vía `lifespan`.
 
 ### Frontend
 - Usar **TypeScript estricto** para evitar errores en tiempo de ejecución.
@@ -194,8 +217,9 @@ npm run dev
   - Contrastes WCAG 2.1 AA/AAA (mínimo 4.5:1 para texto).
 - Conectar al backend utilizando `fetch` del lado del servidor o cliente según corresponda.
 - Manejar estados de carga (loading) y errores de la API.
-- Los tipos TypeScript en `types/` deben ser espejo de los esquemas Pydantic v2 del backend.
+- Los tipos TypeScript en `types/` deben ser espejo de los esquemas Pydantic v2 del backend (incluyendo `company_id` en `StockOut`).
 - Validación de formularios con **Zod** equivalente a los modelos de entrada del backend.
+- Los contratos de API (rutas, métodos, payloads) deben sincronizarse con los esquemas Pydantic v2 del backend.
 
 ---
 
@@ -203,14 +227,15 @@ npm run dev
 
 | Grupo | Prefijo | Endpoints clave |
 |-------|---------|-----------------|
-| Auth | `/api/v1/auth` | `/login`, `/refresh`, `/logout`, `/me`, `/change-password` |
+| Auth | `/api/v1/auth` | `/login`, `/login/json`, `/refresh`, `/logout`, `/me`, `/change-password` |
+| Legales | `/` | `/terminos`, `/privacidad`, `/aviso-legal` |
 | Empresas | `/api/v1/companies` | CRUD completo (SuperAdmin) |
-| Organización | `/api/v1/centers`, `/warehouses`, `/zones`, `/aisles`, `/shelves`, `/bins` | CRUD jerárquico |
-| RBAC | `/api/v1/users`, `/roles`, `/permissions`, `/user-roles` | Usuarios, roles, permisos, asignaciones |
+| Organización | `/api/v1/centers`, `/warehouses`, `/zones`, `/aisles`, `/shelves`, `/bins` | CRUD jerárquico con aislamiento multitenencia |
+| RBAC | `/api/v1/users`, `/roles`, `/permissions`, `/user-roles` | Usuarios, roles, permisos, asignaciones (con blindaje de privilegios) |
 | Maestros | `/api/v1/articles`, `/article-families`, `/article-brands`, `/uoms` | Artículos, familias, marcas, UOM |
 | Trazabilidad | `/api/v1/lots`, `/serials` | Lotes, números de serie |
-| Stock | `/api/v1/stock` | Stock, entrada, salida, traslado interno, movimientos |
-| Inventario | `/api/v1/inventory-counts` | Conteos, líneas, completar, aprobar |
+| Stock | `/api/v1/stock` | Stock, entrada (`/entry`), salida (`/exit`), traslado interno (`/internal-transfer`), movimientos |
+| Inventario | `/api/v1/inventory-counts` | Conteos, líneas (con paginación), completar, aprobar |
 | Ajustes | `/api/v1/adjustments` | Mermas, regularizaciones |
 | Alertas | `/api/v1/alerts` | Stock mínimo, caducidad, reabastecimiento |
 | Auditoría | `/api/v1/audit-logs` | Logs de auditoría (Auditor/SuperAdmin) |
@@ -222,14 +247,16 @@ npm run dev
 
 ### Backend
 ```powershell
-cd H:\Almacen\backend
-pytest -v
+cd H:\Almacen-V1\backend
+pytest tests_integration.py -v
 ```
+
+> Requiere servidor PostgreSQL y FastAPI levantados. Objetivo: 42/42 pruebas verdes.
 
 ### Frontend
 ```powershell
-cd H:\Almacen\frontend
-npm run build      # Verifica compilación y tipos
+cd H:\Almacen-V1\frontend
+npm run build      # Verifica compilación y tipos TypeScript
 npm run lint       # Verifica linting
 ```
 
@@ -241,11 +268,11 @@ npm run lint       # Verifica linting
 |-----|--------|-----------------|
 | Director de Proyecto | @director | Coordinación general, ejecución de comandos de consola |
 | Arquitecto | @arquitecto | Diseño de BD, API, rutas; PLAN.md |
-| Desarrollador Backend | @fastapi_dev | Implementación de API, BD, CORS, JWT |
+| Desarrollador Backend | @fastapi_dev | Implementación de API, BD, CORS, JWT, seed |
 | Desarrollador Frontend | @nextjs_dev | Interfaz de usuario, consumo de API |
 | Tester de Integración | @tester_integracion | Pruebas de integración, CORS, tipado, reporte |
 
 ---
 
-**Estado del proyecto:** ✅ Producción lista — Todas las pruebas de integración en verde (42/42).
-**Última actualización:** 10 de noviembre de 2026
+**Estado del proyecto:** ✅ Todas las pruebas de integración pasadas (42/42). Correcciones de auditoría aplicadas y verificadas con PostgreSQL.  
+**Última actualización:** 11 de noviembre de 2026

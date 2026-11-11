@@ -1,10 +1,18 @@
+"use client"
+
 export const dynamic = "force-dynamic"
 
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
+import { useStock } from "@/hooks/useArticles"
+import type { StockOut } from "@/types/stock"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Alert } from "@/components/ui/alert"
 
 export default function StockPage() {
+  const { data: stock, isLoading, error } = useStock()
+
   return (
     <div className="space-y-6">
       <div>
@@ -12,38 +20,62 @@ export default function StockPage() {
         <p className="text-muted-foreground">Inventario disponible por almacén y ubicación</p>
       </div>
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Artículo</TableHead>
-              <TableHead>Almacén</TableHead>
-              <TableHead>Ubicación (Bin)</TableHead>
-              <TableHead>Lote</TableHead>
-              <TableHead>Cantidad</TableHead>
-              <TableHead>Disponible</TableHead>
-              <TableHead>Estado</TableHead>
+      {isLoading && (
+        <div className="rounded-md border p-4">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <TableRow key={i}>
+              <Skeleton className="h-10 w-32" />
+              <Skeleton className="h-10 w-20" />
+              <Skeleton className="h-10 w-24" />
+              <Skeleton className="h-10 w-20" />
+              <Skeleton className="h-10 w-16" />
+              <Skeleton className="h-10 w-16" />
+              <Skeleton className="h-10 w-16" />
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {[1, 2, 3, 4, 5].map((i) => (
-              <TableRow key={i}>
-                <TableCell className="font-medium">ELEC-{String(i).padStart(3, "0")}</TableCell>
-                <TableCell>WH001</TableCell>
-                <TableCell>A01-S01-B00{i}</TableCell>
-                <TableCell>LOT-2024-{String(i).padStart(3, "0")}</TableCell>
-                <TableCell>{100 * i}</TableCell>
-                <TableCell>{100 * i}</TableCell>
-                <TableCell>
-                  <Badge variant={i % 3 === 0 ? "destructive" : "default"}>
-                    {i % 3 === 0 ? "Bloqueado" : "Disponible"}
-                  </Badge>
-                </TableCell>
+          ))}
+        </div>
+      )}
+
+      {error && (
+        <Alert variant="destructive">
+          Error cargando el stock. Intente nuevamente.
+        </Alert>
+      )}
+
+      {!isLoading && !error && (
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Artículo</TableHead>
+                <TableHead>Almacén</TableHead>
+                <TableHead>Ubicación (Bin)</TableHead>
+                <TableHead>Lote</TableHead>
+                <TableHead>Cantidad</TableHead>
+                <TableHead>Disponible</TableHead>
+                <TableHead>Estado</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {(stock as StockOut[] | undefined)?.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="font-medium">{String(item.article_id)}</TableCell>
+                  <TableCell>{String(item.warehouse_id)}</TableCell>
+                  <TableCell>{String(item.bin_id ?? "—")}</TableCell>
+                  <TableCell>{String(item.lot_id ?? "—")}</TableCell>
+                  <TableCell>{item.quantity}</TableCell>
+                  <TableCell>{item.available_quantity}</TableCell>
+                  <TableCell>
+                    <Badge variant={item.status === "available" ? "default" : item.status === "quarantined" ? "secondary" : "destructive"}>
+                      {item.status}
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   )
 }

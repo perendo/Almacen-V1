@@ -3,6 +3,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from typing import Any
+import uuid
+from app.api.deps import get_db, get_current_active_user, require_role, get_client_ip
 
 from app.core.config import settings
 from app.core.security import (
@@ -12,8 +14,7 @@ from app.core.security import (
     create_refresh_token,
     decode_token,
 )
-from app.api.deps import get_db, get_current_active_user, require_role, require_permission
-from app.models.base import User, Role, UserRole
+from app.models.base import User, Role, UserRole, RevokedToken
 from app.schemas import (
     Token,
     UserLogin,
@@ -27,8 +28,37 @@ from app.schemas import (
 router = APIRouter()
 
 
+def _build_token_data(user: User, db: Session) -> dict:
+    """Construye el payload del JWT incluyendo roles del usuario."""
+    roles = [ur.role.name for ur in user.user_roles] if user.user_roles else []
+    return {
+        "sub": user.email,
+        "user_id": user.id,
+        "company_id": user.company_id,
+        "roles": roles,
+    }
+
+
+def _revoke_token_jti(db: Session, jti: str, user_id: int, expires_at, company_id=None) -> None:
+    """Marca un jti como revocado en la tabla de revoked_tokens."""
+    existing = db.query(RevokedToken).filter(RevokedToken.jti == jti).first()
+    if not existing:
+        db.add(
+            RevokedToken(
+                jti=jti,
+                user_id=user_id,
+                company_id=company_id,
+                expires_at=expires_at,
+            )
+        )
+
+
 @router.post("/login", response_model=Token, tags=["auth"])
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)) -> Any:
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+    request: Request = None,
+) -> Any:
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
@@ -39,12 +69,9 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Usuario inactivo")
 
-    access_token = create_access_token(
-        data={"sub": user.email, "user_id": user.id, "company_id": user.company_id}
-    )
-    refresh_token = create_refresh_token(
-        data={"sub": user.email, "user_id": user.id, "company_id": user.company_id}
-    )
+    token_data = _build_token_data(user, db)
+    access_token = create_access_token(data=token_data)
+    refresh_token = create_refresh_token(data=token_data)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -53,7 +80,11 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 
 
 @router.post("/login/json", response_model=Token, tags=["auth"])
-async def login_json(user_in: UserLogin, db: Session = Depends(get_db)) -> Any:
+async def login_json(
+    user_in: UserLogin,
+    db: Session = Depends(get_db),
+    request: Request = None,
+) -> Any:
     user = db.query(User).filter(User.email == user_in.email).first()
     if not user or not verify_password(user_in.password, user.password_hash):
         raise HTTPException(
@@ -64,12 +95,9 @@ async def login_json(user_in: UserLogin, db: Session = Depends(get_db)) -> Any:
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Usuario inactivo")
 
-    access_token = create_access_token(
-        data={"sub": user.email, "user_id": user.id, "company_id": user.company_id}
-    )
-    refresh_token = create_refresh_token(
-        data={"sub": user.email, "user_id": user.id, "company_id": user.company_id}
-    )
+    token_data = _build_token_data(user, db)
+    access_token = create_access_token(data=token_data)
+    refresh_token = create_refresh_token(data=token_data)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -78,39 +106,94 @@ async def login_json(user_in: UserLogin, db: Session = Depends(get_db)) -> Any:
 
 
 @router.post("/refresh", response_model=Token, tags=["auth"])
-async def refresh_token(refresh_token: str, db: Session = Depends(get_db)) -> Any:
+async def refresh_token(
+    refresh_token: str,
+    db: Session = Depends(get_db),
+) -> Any:
     payload = decode_token(refresh_token)
     if payload is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token de refresco inválido",
         )
+
+    jti = payload.get("jti")
+    if not jti:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token de refresco sin identificador (jti)",
+        )
+
+    # 1. Comprobar si el token está en la tabla de tokens revocados
+    if db.query(RevokedToken).filter(RevokedToken.jti == jti).first():
+        raise HTTPException(status_code=401, detail="Token revocado o inválido")
+
+    # 2. Invalidar el token consumido (Refresh Token Rotation)
+    _revoke_token_jti(
+        db,
+        jti=jti,
+        user_id=payload.get("user_id"),
+        expires_at=payload.get("exp"),
+        company_id=payload.get("company_id"),
+    )
+
     email: str = payload.get("sub")
     user = db.query(User).filter(User.email == email).first()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Usuario no encontrado o inactivo")
 
-    access_token = create_access_token(
-        data={"sub": user.email, "user_id": user.id, "company_id": user.company_id}
-    )
-    new_refresh_token = create_refresh_token(
-        data={"sub": user.email, "user_id": user.id, "company_id": user.company_id}
-    )
+    # 3. Emitir nuevo par con nuevo jti único
+    token_data = _build_token_data(user, db)
+    new_access_token = create_access_token(data=token_data)
+    new_refresh_token = create_refresh_token(data=token_data)
+
+    db.commit()
     return {
-        "access_token": access_token,
+        "access_token": new_access_token,
         "refresh_token": new_refresh_token,
         "token_type": "bearer",
     }
 
 
 @router.post("/logout", tags=["auth"])
-async def logout(current_user: User = Depends(get_current_active_user)) -> Any:
+async def logout(
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    # Revocar el access token actual si se envía su jti (opcional vía header)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1]
+        payload = decode_token(token)
+        if payload and payload.get("jti"):
+            _revoke_token_jti(
+                db,
+                jti=payload.get("jti"),
+                user_id=current_user.id,
+                expires_at=payload.get("exp"),
+                company_id=current_user.company_id,
+            )
+    db.commit()
     return {"detail": "Sesión cerrada correctamente"}
 
 
 @router.get("/me", response_model=UserOut, tags=["auth"])
-async def read_user_me(current_user: User = Depends(get_current_active_user)) -> Any:
-    return current_user
+async def read_user_me(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    # Cargar roles explícitamente para evitar problemas de lazy loading
+    user_roles = db.query(UserRole).filter(UserRole.user_id == current_user.id).all()
+    roles = [ur.role.name for ur in user_roles] if user_roles else []
+    return UserOut(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        is_active=current_user.is_active,
+        company_id=current_user.company_id,
+        roles=roles,
+    )
 
 
 @router.post("/change-password", tags=["auth"])
@@ -154,7 +237,7 @@ async def create_user(
     db.add(user)
     db.flush()
 
-    # Asignar roles
+    # Asignar roles (solo SuperAdmin puede crear usuarios con cualquier rol)
     for role_id in user_in.role_ids:
         role = db.query(Role).filter(Role.id == role_id).first()
         if role:
@@ -163,4 +246,5 @@ async def create_user(
 
     db.commit()
     db.refresh(user)
-    return user
+    roles = [ur.role.name for ur in user.user_roles] if user.user_roles else []
+    return UserOut.model_validate(user, update={"roles": roles})

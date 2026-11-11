@@ -623,3 +623,17 @@ class AuditLog(Base):
         Index("ix_audit_user", "user_id", "timestamp"),
         Index("ix_audit_entity", "entity_type", "entity_id"),
     )
+
+
+class RevokedToken(Base):
+    __tablename__ = "revoked_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    jti = Column(String(255), nullable=False, unique=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User")
+    company = relationship("Company")

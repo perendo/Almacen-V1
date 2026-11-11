@@ -3,6 +3,7 @@ export type StockStatus = "available" | "quarantined" | "blocked"
 
 export interface StockOut {
   id: number
+  company_id: number
   warehouse_id: number
   bin_id: number | null
   article_id: number

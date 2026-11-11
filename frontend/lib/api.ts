@@ -7,6 +7,18 @@ export class ApiError extends Error {
   }
 }
 
+let isRefreshing = false
+let refreshSubscribers: ((token: string) => void)[] = []
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach((cb) => cb(token))
+  refreshSubscribers = []
+}
+
+function addRefreshSubscriber(cb: (token: string) => void) {
+  refreshSubscribers.push(cb)
+}
+
 async function request<T>(
   input: RequestInfo | URL,
   init?: RequestInit
@@ -23,6 +35,87 @@ async function request<T>(
     headers,
     cache: "no-store",
   })
+
+  // Si 401 y no estamos ya refrescando, intentar renovar el access token
+  if (res.status === 401 && token && typeof window !== "undefined") {
+    if (!isRefreshing) {
+      isRefreshing = true
+      try {
+        const refreshToken = localStorage.getItem("refresh_token")
+        if (refreshToken) {
+          const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+          })
+          if (refreshRes.ok) {
+            const data = await refreshRes.json()
+            localStorage.setItem("access_token", data.access_token)
+            localStorage.setItem("refresh_token", data.refresh_token)
+            isRefreshing = false
+            onRefreshed(data.access_token)
+            // Reintentar la petición original con el nuevo token
+            const newHeaders: HeadersInit = {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${data.access_token}`,
+              ...(init?.headers ?? {}),
+            }
+            const retryRes = await fetch(`${API_BASE}${input instanceof Request ? input.url : input}`, {
+              ...init,
+              headers: newHeaders,
+              cache: "no-store",
+            })
+            if (!retryRes.ok) {
+              const body = await retryRes.json().catch(() => null)
+              throw new ApiError(retryRes.status, body?.detail ?? retryRes.statusText, body)
+            }
+            if (retryRes.status === 204) return undefined as T
+            return retryRes.json()
+          } else {
+            // Refresh falló, limpiar sesión
+            isRefreshing = false
+            localStorage.removeItem("access_token")
+            localStorage.removeItem("refresh_token")
+            window.location.href = "/login"
+            throw new ApiError(401, "Sesión expirada", null)
+          }
+        } else {
+          isRefreshing = false
+          throw new ApiError(401, "No hay token de refresco", null)
+        }
+      } catch (err) {
+        isRefreshing = false
+        throw err
+      }
+    } else {
+      // Esperar a que se complete el refresh y reintentar
+      return new Promise((resolve, reject) => {
+        addRefreshSubscriber((newToken) => {
+          const newHeaders: HeadersInit = {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${newToken}`,
+            ...(init?.headers ?? {}),
+          }
+          fetch(`${API_BASE}${input instanceof Request ? input.url : input}`, {
+            ...init,
+            headers: newHeaders,
+            cache: "no-store",
+          })
+            .then((retryRes) => {
+              if (!retryRes.ok) {
+                return retryRes.json().catch(() => null).then((body) => {
+                  throw new ApiError(retryRes.status, body?.detail ?? retryRes.statusText, body)
+                })
+              }
+              if (retryRes.status === 204) return undefined as T
+              return retryRes.json()
+            })
+            .then(resolve)
+            .catch(reject)
+        })
+      })
+    }
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => null)

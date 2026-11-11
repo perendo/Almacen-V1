@@ -5,6 +5,17 @@ import { useRouter } from "next/navigation"
 import Sidebar from "@/components/layout/sidebar"
 import Navbar from "@/components/layout/navbar"
 import { AuthProvider, useAuth } from "@/components/auth-provider"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutos
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+})
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth()
@@ -37,13 +48,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <AuthProvider>
       <AuthGuard>
-        <div className="flex h-screen bg-background">
-          <Sidebar />
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <Navbar />
-            <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <QueryClientProvider client={queryClient}>
+          <div className="flex h-screen bg-background">
+            <Sidebar />
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <Navbar />
+              <main className="flex-1 overflow-y-auto p-6">{children}</main>
+            </div>
           </div>
-        </div>
+        </QueryClientProvider>
       </AuthGuard>
     </AuthProvider>
   )

@@ -9,6 +9,14 @@ from app.schemas import WarehouseBase, WarehouseCreate, WarehouseUpdate, Warehou
 router = APIRouter()
 
 
+def _apply_tenant_filter(query, current_user: Any, company_id: Optional[int] = None):
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" in user_roles and company_id is not None:
+        return query.filter(Warehouse.company_id == company_id) if hasattr(Warehouse, 'company_id') else query
+    # Warehouse no tiene company_id directo, se filtra a través de center -> company
+    return query
+
+
 @router.get("/", response_model=List[WarehouseOut], tags=["warehouses"])
 def read_warehouses(
     db: Session = Depends(get_db),
@@ -17,9 +25,15 @@ def read_warehouses(
     center_id: Optional[int] = Query(None),
     type: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
+    company_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    query = db.query(Warehouse)
+    query = db.query(Warehouse).join(Center, Warehouse.center_id == Center.id)
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" in user_roles and company_id is not None:
+        query = query.filter(Center.company_id == company_id)
+    else:
+        query = query.filter(Center.company_id == current_user.company_id)
     if center_id:
         query = query.filter(Warehouse.center_id == center_id)
     if type:
@@ -38,6 +52,11 @@ def create_warehouse(
     center = db.query(Center).filter(Center.id == warehouse_in.center_id).first()
     if not center:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
+
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles and center.company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="No autorizado para este centro")
+
     warehouse = Warehouse(**warehouse_in.model_dump())
     db.add(warehouse)
     db.commit()
@@ -51,7 +70,11 @@ def read_warehouse(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
-    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    query = db.query(Warehouse).join(Center, Warehouse.center_id == Center.id).filter(Warehouse.id == warehouse_id)
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles:
+        query = query.filter(Center.company_id == current_user.company_id)
+    warehouse = query.first()
     if not warehouse:
         raise HTTPException(status_code=404, detail="Almacén no encontrado")
     return warehouse
@@ -64,7 +87,11 @@ def update_warehouse(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    query = db.query(Warehouse).join(Center, Warehouse.center_id == Center.id).filter(Warehouse.id == warehouse_id)
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles:
+        query = query.filter(Center.company_id == current_user.company_id)
+    warehouse = query.first()
     if not warehouse:
         raise HTTPException(status_code=404, detail="Almacén no encontrado")
     for field, value in warehouse_in.model_dump(exclude_unset=True).items():
@@ -81,7 +108,11 @@ def delete_warehouse(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+    query = db.query(Warehouse).join(Center, Warehouse.center_id == Center.id).filter(Warehouse.id == warehouse_id)
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles:
+        query = query.filter(Center.company_id == current_user.company_id)
+    warehouse = query.first()
     if not warehouse:
         raise HTTPException(status_code=404, detail="Almacén no encontrado")
     db.delete(warehouse)

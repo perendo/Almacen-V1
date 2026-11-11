@@ -75,23 +75,24 @@ def require_permission(resource: str, action: str):
         if "SuperAdmin" in user_role_names:
             return current_user
 
-        # Verificar permisos a través de user_roles -> role_permissions
-        user_roles = db.query(UserRole).filter(UserRole.user_id == current_user.id).all()
-        for ur in user_roles:
-            role_permissions = (
-                db.query(RolePermission)
-                .filter(RolePermission.role_id == ur.role_id)
-                .join(Permission)
-                .filter(Permission.resource == resource, Permission.action == action)
-                .first()
+        # UNA SOLA CONSULTA con JOIN indexado (evita N+1)
+        has_perm = (
+            db.query(RolePermission.id)
+            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .join(Permission, Permission.id == RolePermission.permission_id)
+            .filter(
+                UserRole.user_id == current_user.id,
+                Permission.resource == resource,
+                Permission.action == action,
             )
-            if role_permissions:
-                return current_user
-
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"No tienes permiso para {action} en {resource}",
+            .first()
         )
+        if not has_perm:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No tienes permiso para {action} en {resource}",
+            )
+        return current_user
     return permission_checker
 
 

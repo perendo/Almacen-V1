@@ -12,7 +12,7 @@ echo   Raiz del proyecto: %CD%
 echo.
 
 rem --- Comprobaciones previas -------------------------------------------
-if not exist "env\Scripts\python.exe" (
+if not exist ".venv\Scripts\python.exe" (
     echo [ERROR] No se encontro el entorno virtual en "env\Scripts\python.exe".
     echo         Cree el entorno con:
     echo             python -m venv env
@@ -59,7 +59,7 @@ echo Presiona Ctrl+C para detener ambos servidores.
 echo ============================================
 echo.
 
-"env\Scripts\python.exe" "start_wms.py"
+".venv\Scripts\python.exe" "start_wms.py"
 
 echo.
 echo [INFO] Los servidores se han detenido.

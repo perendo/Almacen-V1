@@ -31,8 +31,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 BACKEND_DIR = PROJECT_ROOT / "backend"
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
-# El entorno virtual del proyecto vive en H:\Almacen\env
-VENV_DIR = PROJECT_ROOT / "env"
+# El entorno virtual del proyecto vive en .venv (raíz del repositorio)
+VENV_DIR = PROJECT_ROOT / ".venv"
 VENV_PYTHON = VENV_DIR / "Scripts" / "python.exe"
 
 BACKEND_HOST = "127.0.0.1"

@@ -390,12 +390,12 @@ class TestTipado:
     def test_stock_out_campos(self):
         """StockOut (Pydantic) vs StockOut (TS en frontend/types/stock.ts)"""
         pydantic_fields = {
-            "id", "warehouse_id", "bin_id", "article_id", "lot_id",
+            "id", "company_id", "warehouse_id", "bin_id", "article_id", "lot_id",
             "serial_id", "quantity", "uom_id", "reserved_quantity",
             "available_quantity", "status", "updated_at",
         }
         ts_fields = {
-            "id", "warehouse_id", "bin_id", "article_id", "lot_id",
+            "id", "company_id", "warehouse_id", "bin_id", "article_id", "lot_id",
             "serial_id", "quantity", "uom_id", "reserved_quantity",
             "available_quantity", "status", "updated_at",
         }

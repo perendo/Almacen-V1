@@ -1,10 +1,12 @@
 "use client"
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react"
+import { api } from "@/lib/api"
+import type { UserOut } from "@/types/auth"
 
 interface AuthContextType {
   token: string | null
-  user: any | null
+  user: UserOut | null
   isAuthenticated: boolean
   loading: boolean
   login: (token: string) => void
@@ -15,7 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTokenState] = useState<string | null>(null)
-  const [user, setUser] = useState<any | null>(null)
+  const [user, setUser] = useState<UserOut | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [loading, setLoading] = useState(true)
 
@@ -26,8 +28,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAuthenticated(true)
       try {
         const payload = JSON.parse(atob(t.split(".")[1]))
-        // El token JWT del backend trae "sub" (email) pero no "email".
-        setUser({ ...payload, email: payload.email ?? payload.sub })
+        setUser({
+          id: payload.user_id,
+          email: payload.email ?? payload.sub,
+          full_name: payload.full_name ?? "",
+          is_active: true,
+          company_id: payload.company_id ?? null,
+          roles: payload.roles ?? [],
+        } as UserOut)
+        // Cargar perfil completo desde el backend para tener roles y datos actualizados
+        void api
+          .get<UserOut>("/auth/me")
+          .then((me) => setUser(me))
+          .catch(() => {
+            // Si /auth/me falla, mantener los datos del token
+          })
       } catch {
         setUser(null)
       }
@@ -41,7 +56,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsAuthenticated(true)
     try {
       const payload = JSON.parse(atob(token.split(".")[1]))
-      setUser({ ...payload, email: payload.email ?? payload.sub })
+      setUser({
+        id: payload.user_id,
+        email: payload.email ?? payload.sub,
+        full_name: payload.full_name ?? "",
+        is_active: true,
+        company_id: payload.company_id ?? null,
+        roles: payload.roles ?? [],
+      } as UserOut)
+      void api
+        .get<UserOut>("/auth/me")
+        .then((me) => setUser(me))
+        .catch(() => {})
     } catch {
       setUser(null)
     }
@@ -49,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem("access_token")
+    localStorage.removeItem("refresh_token")
     document.cookie = "access_token=; path=/; max-age=0; samesite=lax"
     setTokenState(null)
     setUser(null)

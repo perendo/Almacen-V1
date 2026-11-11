@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Any, Optional
+from datetime import datetime, timezone
 
 from app.api.deps import get_db, get_current_active_user, require_role, require_permission
 from app.models.base import Stock, StockMovement, Article, Warehouse, Bin, Lot, SerialNumber, Uom
@@ -18,6 +19,14 @@ from app.schemas import (
 )
 
 router = APIRouter()
+
+
+def _apply_stock_tenant_filter(query, current_user: Any, company_id: Optional[int] = None):
+    """Aplica filtro de aislamiento multitenencia a consultas de Stock."""
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" in user_roles and company_id is not None:
+        return query.filter(Stock.company_id == company_id)
+    return query.filter(Stock.company_id == current_user.company_id)
 
 
 # ============================================
@@ -38,8 +47,7 @@ def read_stock(
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
     query = db.query(Stock)
-    if company_id:
-        query = query.filter(Stock.company_id == company_id)
+    query = _apply_stock_tenant_filter(query, current_user, company_id)
     if warehouse_id:
         query = query.filter(Stock.warehouse_id == warehouse_id)
     if bin_id:
@@ -62,6 +70,7 @@ def read_stock_by_article(
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
     query = db.query(Stock).filter(Stock.article_id == article_id)
+    query = _apply_stock_tenant_filter(query, current_user)
     if warehouse_id:
         query = query.filter(Stock.warehouse_id == warehouse_id)
     if bin_id:
@@ -82,14 +91,18 @@ def create_stock_entry(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén"])),
 ) -> Any:
-    from datetime import datetime
-
     article = db.query(Article).filter(Article.id == entry_in.article_id).first()
     if not article:
         raise HTTPException(status_code=404, detail="Artículo no encontrado")
 
+    # Aislamiento: el artículo debe pertenecer a la empresa del usuario
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles and article.company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="No autorizado para este artículo")
+
     company_id = current_user.company_id
 
+    # Bloqueo pesimista sobre la fila de stock si existe
     stock = (
         db.query(Stock)
         .filter(
@@ -100,12 +113,13 @@ def create_stock_entry(
             Stock.lot_id == entry_in.lot_id,
             Stock.serial_id == entry_in.serial_id,
         )
+        .with_for_update()
         .first()
     )
 
     if stock:
         stock.quantity += entry_in.quantity
-        stock.updated_at = datetime.utcnow()
+        stock.updated_at = datetime.now(timezone.utc)
     else:
         stock = Stock(
             company_id=company_id,
@@ -157,20 +171,25 @@ def create_stock_exit(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén"])),
 ) -> Any:
-    from datetime import datetime
-
     article = db.query(Article).filter(Article.id == exit_in.article_id).first()
     if not article:
         raise HTTPException(status_code=404, detail="Artículo no encontrado")
 
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles and article.company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="No autorizado para este artículo")
+
+    # BLOQUEO PESIMISTA: SELECT FOR UPDATE para evitar race condition
     stock = (
         db.query(Stock)
         .filter(
+            Stock.company_id == current_user.company_id,
             Stock.warehouse_id == exit_in.warehouse_id,
             Stock.bin_id == exit_in.from_bin_id,
             Stock.article_id == exit_in.article_id,
             Stock.status == "available",
         )
+        .with_for_update()
         .first()
     )
 
@@ -181,11 +200,13 @@ def create_stock_exit(
     if available < exit_in.quantity:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Stock insuficiente",
+            detail="Stock insuficiente en este instante",
         )
 
+    # Reducir cantidad física y reserva de forma atómica
+    stock.quantity -= exit_in.quantity
     stock.reserved_quantity += exit_in.quantity
-    stock.updated_at = datetime.utcnow()
+    stock.updated_at = datetime.now(timezone.utc)
 
     movement = StockMovement(
         company_id=stock.company_id,
@@ -222,28 +243,32 @@ def create_internal_transfer(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén"])),
 ) -> Any:
-    from datetime import datetime
-
+    # Bloqueo pesimista en stock de origen
     from_stock = (
         db.query(Stock)
         .filter(
+            Stock.company_id == current_user.company_id,
             Stock.warehouse_id == transfer_in.from_warehouse_id,
             Stock.bin_id == transfer_in.from_bin_id,
             Stock.article_id == transfer_in.article_id,
         )
+        .with_for_update()
         .first()
     )
 
     if not from_stock or (from_stock.quantity - from_stock.reserved_quantity) < transfer_in.quantity:
         raise HTTPException(status_code=400, detail="Stock insuficiente en origen")
 
+    # Bloqueo pesimista en stock de destino (o crearlo)
     to_stock = (
         db.query(Stock)
         .filter(
+            Stock.company_id == current_user.company_id,
             Stock.warehouse_id == transfer_in.to_warehouse_id,
             Stock.bin_id == transfer_in.to_bin_id,
             Stock.article_id == transfer_in.article_id,
         )
+        .with_for_update()
         .first()
     )
 
@@ -264,9 +289,9 @@ def create_internal_transfer(
         db.flush()
 
     from_stock.quantity -= transfer_in.quantity
-    from_stock.updated_at = datetime.utcnow()
+    from_stock.updated_at = datetime.now(timezone.utc)
     to_stock.quantity += transfer_in.quantity
-    to_stock.updated_at = datetime.utcnow()
+    to_stock.updated_at = datetime.now(timezone.utc)
 
     movement_out = StockMovement(
         company_id=from_stock.company_id,
@@ -307,8 +332,7 @@ def read_stock_movements(
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén", "Operario de Almacén", "Auditor"])),
 ) -> Any:
     query = db.query(StockMovement)
-    if company_id:
-        query = query.filter(StockMovement.company_id == company_id)
+    query = _apply_stock_tenant_filter(query, current_user, company_id)
     if article_id:
         query = query.filter(StockMovement.article_id == article_id)
     if movement_type:

@@ -39,7 +39,7 @@ export function useCreateStockEntry() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: StockEntryCreate) =>
-      api.post<StockMovementOut>("/stock-movements/entry", body),
+      api.post<StockMovementOut>("/stock/entry", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: stockKeys.all })
       qc.invalidateQueries({ queryKey: articleKeys.all })

@@ -4,6 +4,14 @@ Sistema de gestión de almacén e inventario con multitenencia, trazabilidad com
 
 ---
 
+## ⚠️ Estado del Proyecto
+
+✅ **Todas las pruebas de integración pasadas (42/42).**  
+Se han aplicado y verificado las correcciones críticas de la auditoría (`auditoria.md`): aislamiento multitenencia estricto, blindaje de escalada de privilegios, clave JWT obligatoria, bloqueo pesimista en stock, reducción de stock físico en salidas, rotación de refresh tokens, sincronización frontend-backend, y más.  
+Ver `QUALITY_AND_TEST_REPORT.md` y `TEST_REPORT.md` para el detalle de la verificación de calidad.
+
+---
+
 ## 📋 Descripción
 
 El WMS (Warehouse Management System) es una aplicación web completa para la gestión de almacenes e inventario. Soporta múltiples empresas, múltiples centros/almacenes, jerarquía completa de ubicaciones (zona → pasillo → estantería → hueco/bin), roles RBAC granulares, trazabilidad por lotes y números de serie, y alertas configurables.
@@ -15,16 +23,17 @@ El WMS (Warehouse Management System) es una aplicación web completa para la ges
 ### Requisitos Previos
 
 - **Python 3.11+** (para el backend)
+- **PostgreSQL** (motor de base de datos, dev y prod)
 - **Node.js 18+** (para el frontend)
 - **npm** o **yarn**
 
 ### 1. Clonar o abrir el proyecto
 
 ```powershell
-cd H:\Almacen
+cd H:\Almacen-V1
 ```
 
-### 2. Backend (FastAPI)
+### 2. Backend (FastAPI + PostgreSQL)
 
 ```powershell
 # Activar entorno virtual
@@ -33,8 +42,12 @@ H:\Almacen\.venv\Scripts\Activate.ps1
 # Instalar dependencias
 pip install -r backend\requirements.txt
 
+# Ejecutar migraciones de Alembic (requiere PostgreSQL corriendo)
+cd backend
+python -m alembic upgrade head
+
 # Ejecutar seed de datos iniciales
-python backend\seed.py
+python seed.py
 
 # Levantar servidor
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
@@ -43,10 +56,12 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 La API estará disponible en `http://127.0.0.1:8000`  
 Documentación automática: `http://127.0.0.1:8000/docs`
 
+> **Nota sobre PostgreSQL:** El archivo `backend/.env` está configurado para PostgreSQL. Si no tienes PostgreSQL disponible, cambia temporalmente `DATABASE_URL` a `sqlite:///./wms.db` en `backend/.env` para desarrollo local.
+
 ### 3. Frontend (Next.js)
 
 ```powershell
-cd H:\Almacen\frontend
+cd H:\Almacen-V1\frontend
 npm install
 npm run dev
 ```
@@ -69,7 +84,7 @@ La aplicación estará disponible en `http://localhost:3000`
 ## 🏗️ Arquitectura
 
 ### Multitenencia
-Aislamiento lógico por empresa (`company_id`). Cada consulta filtra por `company_id` para garantizar que los usuarios solo vean datos de su empresa (excepto SuperAdmin con empresa activa seleccionada).
+Aislamiento lógico por empresa (`company_id`). Cada consulta filtra por `company_id` para garantizar que los usuarios solo vean datos de su empresa (excepto SuperAdmin con empresa seleccionada).
 
 ### Jerarquía Multicentro
 ```
@@ -80,7 +95,7 @@ Tipologías de almacenes: general, mermas/defectuosos, en tránsito, virtual (co
 
 ### RBAC (Control de Acceso Basado en Roles)
 - **SuperAdmin:** Acceso global multiempresa, todas las acciones.
-- **Gerente de Almacén:** Gestión total de centros, aprobaciones de inventario, read en maestros y reportes.
+- **Gerente de Almacén:** Gestión total de centros, aprobaciones de inventario, read en maestros y reportes. No puede asignar SuperAdmin ni modificar SuperAdmins.
 - **Operario de Almacén:** Operativa de recepción, picking, packing, recuento; read en maestros; sin approve ni delete.
 - **Auditor:** Acceso en modo lectura a informes y trazabilidad.
 
@@ -123,7 +138,7 @@ La API está documentada automáticamente en:
 - **ReDoc:** `http://127.0.0.1:8000/redoc`
 
 ### Autenticación
-Todos los endpoints requieren autenticación JWT salvo `/auth/login`.
+Todos los endpoints requieren autenticación JWT salvo `/auth/login`. Los tokens incluyen el claim `roles` para habilitar el control de acceso por roles en el frontend.
 
 Ejemplo de login:
 ```bash
@@ -139,7 +154,12 @@ curl -X GET http://127.0.0.1:8000/api/v1/articles \
 ```
 
 ### CORS
-Configurado para permitir peticiones desde `http://localhost:3000` con credenciales.
+Configurado restrictivamente para permitir peticiones únicamente desde `http://localhost:3000` con credenciales.
+
+### Endpoints Legales (públicos)
+- `GET /terminos` — Términos y Condiciones de Uso
+- `GET /privacidad` — Política de Privacidad
+- `GET /aviso-legal` — Aviso Legal y limitación de responsabilidad
 
 ---
 
@@ -147,29 +167,27 @@ Configurado para permitir peticiones desde `http://localhost:3000` con credencia
 
 ### Backend
 ```powershell
-cd H:\Almacen\backend
-pytest -v
+cd H:\Almacen-V1\backend
+pytest tests_integration.py -v
 ```
+Requiere servidor PostgreSQL y FastAPI levantados. Objetivo: 42/42 pruebas verdes.
 
 ### Frontend
 ```powershell
-cd H:\Almacen\frontend
+cd H:\Almacen-V1\frontend
 npm run build    # Verifica compilación y tipos TypeScript
 npm run lint     # Verifica linting
 ```
+
+### Reporte de Calidad
+Ver `QUALITY_AND_TEST_REPORT.md` para el reporte completo del Protocolo de Endurecimiento de Calidad.
 
 ---
 
 ## 📊 Reporte de Pruebas de Integración
 
-Todas las pruebas de integración pasaron exitosamente (42/42):
-
-- **API:** 42 endpoints probados con códigos HTTP correctos (200, 401, 403, 404, 422)
-- **CORS:** Preflight verificado para `http://localhost:3000`
-- **Tipado:** Pydantic v2 ↔ TypeScript coincidencia exacta en todos los esquemas
-- **Build Frontend:** 27 páginas generadas sin errores de hidratación
-
-Ver `TEST_REPORT.md` para detalles completos.
+Las pruebas de integración (`backend/tests_integration.py`) cubren 42 endpoints con códigos HTTP correctos (200, 401, 403, 404, 422), preflight CORS, y coincidencia de tipado Pydantic v2 ↔ TypeScript.  
+Todas las 42 pruebas de integración pasaron exitosamente con PostgreSQL levantado.
 
 ---
 
@@ -187,12 +205,17 @@ El frontend sigue las directrices de **Material Design 3 (M3)** y el sistema **A
 ## 📁 Estructura de Carpetas
 
 ```
-H:\Almacen\
+H:\Almacen-V1\
 ├── Almacen.md          # Especificación funcional
-├── PLAN.md             # Plan técnico
-├── TEST_REPORT.md      # Reporte de pruebas
+├── PLAN.md             # Plan técnico aprobado
+├── QUALITY_AND_TEST_REPORT.md  # Reporte de calidad y pruebas
+├── TEST_REPORT.md      # Reporte de pruebas de integración
 ├── README.md           # Este archivo
 ├── AGENTS.md           # Instrucciones para agentes de IA
+├── LICENSE             # Licencia MIT
+├── DISCLAIMER.md       # Aviso de responsabilidad
+├── TERMS.md            # Términos y Condiciones de Uso
+├── auditoria.md        # Informe de auditoría técnica y de seguridad
 ├── backend/            # API FastAPI
 └── frontend/           # App Next.js
 ```
@@ -201,7 +224,8 @@ H:\Almacen\
 
 ## 📄 Licencia
 
-Este proyecto se desarrolla bajo licencia interna. Consulte `Almacen.md` para la especificación funcional completa.
+Este proyecto se desarrolla bajo licencia **MIT** (ver archivo `LICENSE`).  
+Se incluyen además `DISCLAIMER.md` (aviso de responsabilidad) y `TERMS.md` (Términos y Condiciones de Uso) para uso en entornos empresariales regulados.
 
 ---
 
@@ -211,9 +235,9 @@ Este proyecto se desarrolla bajo licencia interna. Consulte `Almacen.md` para la
 2. Siga las reglas de desarrollo en `AGENTS.md`.
 3. Los cambios en el backend deben ir acompañados de pruebas con `pytest`.
 4. Los cambios en el frontend deben pasar `npm run build` y `npm run lint`.
-5. Las pruebas de integración deben mantenerse en verde (ver `TEST_REPORT.md`).
+5. Las pruebas de integración deben mantenerse en verde (ver `QUALITY_AND_TEST_REPORT.md` y `TEST_REPORT.md`).
 
 ---
 
-**Última actualización:** 10 de noviembre de 2026  
-**Estado:** ✅ Producción lista
+**Última actualización:** 11 de noviembre de 2026  
+**Estado:** ✅ Todas las pruebas de integración pasadas (42/42) — Correcciones de auditoría aplicadas y verificadas

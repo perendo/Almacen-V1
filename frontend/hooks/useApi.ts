@@ -221,7 +221,7 @@ export function useCreateStockEntry() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: StockEntryCreate) =>
-      api.post<StockMovementOut>("/stock-movements/entry", body),
+      api.post<StockMovementOut>("/stock/entry", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: stockKeys.all })
       qc.invalidateQueries({ queryKey: articleKeys.all })
@@ -232,7 +232,7 @@ export function useCreateStockEntry() {
 export function useCreateStockExit() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: any) => api.post("/stock-movements/exit", body),
+    mutationFn: (body: any) => api.post("/stock/exit", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: stockKeys.all })
     },
@@ -242,7 +242,7 @@ export function useCreateStockExit() {
 export function useCreateInternalTransfer() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: any) => api.post("/stock-movements/internal-transfer", body),
+    mutationFn: (body: any) => api.post("/stock/internal-transfer", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: stockKeys.all })
     },

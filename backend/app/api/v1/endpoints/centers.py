@@ -19,8 +19,11 @@ def read_centers(
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
     query = db.query(Center)
-    if company_id:
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" in user_roles and company_id is not None:
         query = query.filter(Center.company_id == company_id)
+    else:
+        query = query.filter(Center.company_id == current_user.company_id)
     if is_active is not None:
         query = query.filter(Center.is_active == is_active)
     return query.offset(skip).limit(limit).all()
@@ -32,10 +35,14 @@ def create_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    # Verificar que la empresa existe
     company = db.query(Company).filter(Company.id == center_in.company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
+
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles and center_in.company_id != current_user.company_id:
+        raise HTTPException(status_code=403, detail="No autorizado para esta empresa")
+
     center = Center(**center_in.model_dump())
     db.add(center)
     db.commit()
@@ -49,7 +56,11 @@ def read_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    center = db.query(Center).filter(Center.id == center_id).first()
+    query = db.query(Center).filter(Center.id == center_id)
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles:
+        query = query.filter(Center.company_id == current_user.company_id)
+    center = query.first()
     if not center:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     return center
@@ -62,7 +73,11 @@ def update_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    center = db.query(Center).filter(Center.id == center_id).first()
+    query = db.query(Center).filter(Center.id == center_id)
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles:
+        query = query.filter(Center.company_id == current_user.company_id)
+    center = query.first()
     if not center:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     for field, value in center_in.model_dump(exclude_unset=True).items():
@@ -79,7 +94,11 @@ def delete_center(
     db: Session = Depends(get_db),
     current_user: Any = Depends(require_role(["SuperAdmin", "Gerente de Almacén"])),
 ) -> Any:
-    center = db.query(Center).filter(Center.id == center_id).first()
+    query = db.query(Center).filter(Center.id == center_id)
+    user_roles = [ur.role.name for ur in current_user.user_roles] if current_user.user_roles else []
+    if "SuperAdmin" not in user_roles:
+        query = query.filter(Center.company_id == current_user.company_id)
+    center = query.first()
     if not center:
         raise HTTPException(status_code=404, detail="Centro no encontrado")
     db.delete(center)

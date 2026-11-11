@@ -17,7 +17,7 @@ def read_valuation_report(
     db: Session = Depends(get_db),
     company_id: Optional[int] = Query(None),
     warehouse_id: Optional[int] = Query(None),
-    method: str = Query("pmp", regex="^(pmp|fifo)$"),
+    method: str = Query("pmp", pattern="^(pmp|fifo)$"),
     current_user: Any = Depends(require_role(["SuperAdmin", "Auditor"])),
 ) -> Any:
     return {
@@ -68,8 +68,8 @@ def read_kpis(
 @router.get("/export", tags=["reports"])
 def export_report(
     db: Session = Depends(get_db),
-    report_type: str = Query(..., regex="^(valuation|rotation|kpis)$"),
-    format: str = Query("csv", regex="^(csv|xlsx|pdf)$"),
+    report_type: str = Query(..., pattern="^(valuation|rotation|kpis)$"),
+    format: str = Query("csv", pattern="^(csv|xlsx|pdf)$"),
     company_id: Optional[int] = Query(None),
     current_user: Any = Depends(require_role(["SuperAdmin", "Auditor"])),
 ) -> Any:
